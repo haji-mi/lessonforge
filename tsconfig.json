@@ -16,7 +16,7 @@
     "useDefineForClassFields": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["vite/client", "vitest/globals"]
+    "types": ["vite/client", "vitest/globals", "node"]
   },
   "include": ["src", "tests", "vite.config.ts", "eslint.config.js"]
 }
