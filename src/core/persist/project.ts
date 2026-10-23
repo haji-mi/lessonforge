@@ -336,11 +336,11 @@ export function applyEdits(plan: LessonPlan, edits: OverlayEdit[]): LessonPlan {
     } else if (e.op === 'add') {
       sections.push({
         sectionId: e.sectionId,
-        role: '（人工补充）',
+        role: e.role ?? '（人工补充）',
         contentType: 'A',
         content: e.content,
-        traces: [],
-        basis: '用户人工补充（无原文溯源）',
+        traces: e.traces ?? [],
+        basis: e.traces?.length ? '人工补入（原文 MKU，带溯源）' : '用户人工补充（无原文溯源）',
       })
     }
   }
@@ -376,6 +376,41 @@ export async function saveEdit(
       edits: [...existing.edits, edit],
       updatedAt: Date.now(),
     })
+  } else {
+    await db.overlays.add({
+      lessonId,
+      baseDraftId: active.id,
+      edits: [edit],
+      updatedAt: Date.now(),
+    })
+  }
+}
+
+/** 人工补入未纳入的 MKU（基线 §8 护栏：未纳入清单可补入 → A 段 + 溯源 + overlay 保护） */
+export async function addManualSection(
+  lessonId: string,
+  role: string,
+  content: string,
+  trace: { file: string; start: number; end: number },
+): Promise<void> {
+  const db = getDb()
+  const active = await db.drafts
+    .where('lessonId')
+    .equals(lessonId)
+    .and((d) => d.state === 'active')
+    .first()
+  if (!active) throw new Error('无 active 草稿，无法补入')
+  const existing = await db.overlays.get(lessonId)
+  const edit: OverlayEdit = {
+    sectionId: `manual-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+    op: 'add',
+    content,
+    role,
+    traces: [trace],
+    at: Date.now(),
+  }
+  if (existing) {
+    await db.overlays.update(lessonId, { edits: [...existing.edits, edit], updatedAt: Date.now() })
   } else {
     await db.overlays.add({
       lessonId,

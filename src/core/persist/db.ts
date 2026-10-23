@@ -84,6 +84,10 @@ export interface OverlayEdit {
   op: 'replace' | 'delete' | 'add'
   content: string
   at: number
+  /** add 操作的环节角色（人工补入） */
+  role?: string
+  /** add 操作可携带原文来源（人工补入的 MKU 溯源） */
+  traces?: { file: string; start: number; end: number }[]
 }
 
 export interface OverlayRecord {

@@ -10,6 +10,7 @@ import {
   type LessonExportMeta,
 } from './core/export/exporters'
 import {
+  addManualSection,
   approveLesson,
   compileAndStoreDraft,
   computeLessonStatus,
@@ -190,6 +191,30 @@ export default function App() {
     await refreshSelected()
   }
 
+  async function batchCompile() {
+    if (!project) return
+    let compiled = 0
+    let conflicts = 0
+    for (const l of lessons) {
+      try {
+        const r = await compileAndStoreDraft(l.id)
+        compiled++
+        if (r.conflict) conflicts++
+      } catch {
+        // 单课时失败不阻断批次（B4 故障隔离）
+      }
+    }
+    await refreshLessons(project.id)
+    const fresh = await listLessons(project.id)
+    if (selected) {
+      const cur = fresh.find((x) => x.id === selected.id)
+      if (cur) await selectLesson(cur)
+    }
+    setToast(
+      `批量编译完成：${compiled} 课时${conflicts > 0 ? `（${conflicts} 个存在待决冲突，默认保留用户版本）` : ''}`,
+    )
+  }
+
   async function batchExport() {
     if (!project) return
     const exported: { plan: any; meta: LessonExportMeta }[] = []
@@ -329,6 +354,7 @@ export default function App() {
         </button>
         <h1>{project?.name}</h1>
         <div className="header-actions">
+          <button onClick={batchCompile}>编译全部</button>
           <button onClick={batchExport}>批量导出 ZIP</button>
           <button onClick={backupJson}>备份 JSON</button>
         </div>
@@ -356,6 +382,20 @@ export default function App() {
                 revision={revision}
                 onAction={onAction}
                 onEditSection={onEditSection}
+                onIncludeMku={async (mku) => {
+                  if (!selected) return
+                  try {
+                    await addManualSection(selected.id, `补充·${mku.kind}`, mku.text, {
+                      file: selected.normPath,
+                      start: mku.span.start,
+                      end: mku.span.end,
+                    })
+                    setToast('已补入为 A 级段落（带原文溯源，overlay 保护）')
+                  } catch (e) {
+                    setToast(`补入失败：${String(e)}`)
+                  }
+                  await refreshSelected()
+                }}
                 onJumpTrace={(s: PromptSection) => {
                   const t = s.traces[0]
                   if (t) setTrace({ start: t.start, end: t.end })

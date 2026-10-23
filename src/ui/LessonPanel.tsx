@@ -14,11 +14,26 @@ export interface LessonWorkbenchProps {
   onAction: (action: string, payload?: unknown) => void
   onEditSection: (sectionId: string, content: string) => void
   onJumpTrace: (section: PromptSection) => void
+  onIncludeMku: (mku: {
+    id: string
+    kind: string
+    text: string
+    span: { start: number; end: number }
+  }) => void
   refresh: () => void
 }
 
 export function LessonWorkbench(props: LessonWorkbenchProps) {
-  const { lesson, status, effective, revision, onAction, onEditSection, onJumpTrace } = props
+  const {
+    lesson,
+    status,
+    effective,
+    revision,
+    onAction,
+    onEditSection,
+    onJumpTrace,
+    onIncludeMku,
+  } = props
   const [editingSection, setEditingSection] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [showCoverage, setShowCoverage] = useState(false)
@@ -66,6 +81,7 @@ export function LessonWorkbench(props: LessonWorkbenchProps) {
             onAction('ack-coverage')
             setShowCoverage(false)
           }}
+          onInclude={onIncludeMku}
         />
       ) : null}
 
@@ -179,10 +195,12 @@ function CoveragePanel({
   plan,
   lessonId,
   onAck,
+  onInclude,
 }: {
   plan: LessonPlan
   lessonId: string
   onAck: () => void
+  onInclude: (mku: LessonPlan['coverage']['uncovered'][number]) => void
 }) {
   return (
     <div className="coverage-panel">
@@ -197,7 +215,10 @@ function CoveragePanel({
         <ul>
           {plan.coverage.uncovered.map((m) => (
             <li key={m.id} className="uncovered-item">
-              [{m.kind}] {m.text.slice(0, 60)}…
+              [{m.kind}] {m.text.slice(0, 60)}…{' '}
+              <button className="link" onClick={() => onInclude(m)}>
+                补入提示词
+              </button>
             </li>
           ))}
         </ul>
