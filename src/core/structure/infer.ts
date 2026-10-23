@@ -27,6 +27,8 @@ export interface FileSignal {
   normPath: string
   headings: { depth: number; text: string }[]
   frontmatter?: Record<string, any> | null
+  /** 结构推断内部剥离根目录后，课时 path 必须回填此原始完整路径（与 pathIndex 一致） */
+  originalNormPath?: string
 }
 
 /** 可配置的章节名称启发式（默认值，非硬编码结构） */
@@ -85,7 +87,11 @@ export function inferStructure(
     const only = topSegs.values().next().value as string
     courseName = only
     courseEvidence = [`根下唯一子目录「${only}」含 ${files.length} 个 md → 该目录为课程`]
-    working = files.map((f) => ({ ...f, normPath: f.normPath.slice(only.length + 1) }))
+    working = files.map((f) => ({
+      ...f,
+      normPath: f.normPath.slice(only.length + 1),
+      originalNormPath: f.normPath,
+    }))
   }
 
   // 目录树
@@ -120,7 +126,11 @@ export function inferStructure(
     const lessons: StructureLesson[] = dir.files.map((f) => {
       const fileName = f.normPath.split('/').pop()!
       const t = lessonTitle(f, fileName)
-      return { path: f.normPath, title: t.title, titleBasis: t.basis }
+      return {
+        path: f.originalNormPath ?? f.normPath,
+        title: t.title,
+        titleBasis: t.basis,
+      }
     })
     lessons.sort((a, b) =>
       compareEntries({ name: a.path, kind: 'file' }, { name: b.path, kind: 'file' }),
