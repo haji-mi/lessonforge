@@ -5,4 +5,6 @@ playwright-report/
 test-results/
 *.local
 fixtures-real/
+.zcode/
 .DS_Store
+Thumbs.db

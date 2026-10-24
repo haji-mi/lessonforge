@@ -5,7 +5,7 @@
 
 ## 1. 可行性实测（OpenRouter 免费模型，2026-10-24）
 
-密钥：用户提供（CCSwitch 内保存的 OpenRouter Key），`/api/v1/key` 验证有效（free tier）。
+密钥：用户提供（OpenRouter Key），`/api/v1/key` 验证有效（free tier）。
 
 | 模型                                   | 结果                              |
 | -------------------------------------- | --------------------------------- |
@@ -36,7 +36,7 @@
 
 `npm run check`（typecheck + lint + format:check + test 234/234）退出码 0。
 
-## 3. 应用内真实验收（生产构建 + preview + ZCode IAB 浏览器）
+## 3. 应用内真实验收（生产构建 + preview + Chromium 内核浏览器）
 
 用早前 E2E 留存的 IndexedDB 项目（「函数的概念」，编译稿 454 字），生产构建 CSP 生效：
 
@@ -78,7 +78,7 @@
 
 需求：用户要能自接 API、或用英伟达免费 API、或借用本机 OpenCode 额度。
 
-- **英伟达 NIM**：Key（用户提供，CCSwitch 内存有）实测有效（GET /models 85 个模型）；
+- **英伟达 NIM**：Key（用户提供）实测有效（GET /models 85 个模型）；
   chat 实测 200。**浏览器直连被 CORS 拦截**（响应无 Access-Control-Allow-Origin）→
   vite dev/preview 增加 `/nim` 同源代理转发 integrate.api.nvidia.com（vite.config.ts nimProxy）。
   预设模型 3 个（nemotron-3-ultra/super/llama-70b），按序回退。
