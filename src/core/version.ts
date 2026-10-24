@@ -4,8 +4,11 @@ export const APP_MODEL_VERSION = 1
 /** 解析器版本（影响 ParsedDoc 缓存有效性） */
 export const PARSER_VERSION = 1
 
-/** 提示词编译器版本（影响草稿 staleness 判定） */
-export const COMPILER_VERSION = 1
+/** 提示词编译器版本（影响草稿 staleness 判定）
+ * v2（2026-10-24）：MKU 切分/课型分类按真实笔记首轮校准（K2）——
+ * 列表项与加粗引导语纳入线索解析、章节上下文、generic 兜底纳入相关知识块。
+ */
+export const COMPILER_VERSION = 2
 
 /** 提示词脚手架结构版本（固定部分格式演进用） */
 export const PROMPT_SCHEMA_VERSION = 1

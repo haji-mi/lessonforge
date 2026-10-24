@@ -331,9 +331,10 @@ export function compileLesson(input: CompileInput): LessonPlan {
       )
     }
   } else {
-    // generic 兜底：讲解（核心 MKU 按序）+ 小结
-    const cores = mkus.filter((m) => m.tier === 'core')
-    if (cores.length === 0) {
+    // generic 兜底：讲解（核心 + 相关知识块按序）+ 小结。
+    // 转写模式仅用于连可识别的相关知识都没有的结构异常场景（基线 §8）。
+    const teachable = mkus.filter((m) => m.tier === 'core' || m.tier === 'related')
+    if (teachable.length === 0) {
       sections.push(
         bSection(
           nextId(),
@@ -354,7 +355,7 @@ export function compileLesson(input: CompileInput): LessonPlan {
         bSection(nextId(), '课堂小结', '请学生复述本课要点，教师补充。', 'rule:generic-summary'),
       )
     } else {
-      for (const m of cores) {
+      for (const m of teachable) {
         sections.push(aSection(nextId(), '讲解', m.text, m, lessonPath))
       }
       sections.push(

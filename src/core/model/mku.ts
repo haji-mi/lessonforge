@@ -1,10 +1,15 @@
 /**
  * 最小知识单元（MKU）切分（架构基线 §3 K1 / §8）。
- * 全部确定性规则；tier 归属为领域启发式（K2 试验期，待真实笔记校准）。
+ * 全部确定性规则；tier 归属为领域启发式（K2 试验期，2026-10-24 依据真实笔记首轮校准）。
  * 切分对 CourseModel 的块序列进行；%%注释%% 作为作者注单元（背景层）。
+ *
+ * 校准要点：列表项与加粗引导语（`**术语**：内容`）是真实笔记的主要知识载体，
+ * 与段落走同一套线索解析（cues.ts）；标题建立章节上下文（推导/例题/定义/性质），
+ * 性质表格与 ⚠️ 提醒引用块按上下文归入相应层次，不再一律进背景层。
  */
 import type { ParsedDoc } from '../parse/parse'
 import type { Span } from '../types'
+import { CUES, boldLeadOf, stripListPrefix, stripMarkers } from './cues'
 
 export type MkuKind =
   | 'definition'
@@ -51,10 +56,53 @@ export interface MkuExclusion {
   reason?: string
 }
 
+/** 章节上下文（由标题维护） */
+interface SegCtx {
+  inDerivation: boolean
+  inExample: boolean
+  section: 'definition' | 'property' | null
+}
+
+/**
+ * 线索解析器：段落与列表项共用。
+ * 顺序即优先级；返回 null → 背景层。
+ */
+function resolveKind(
+  raw: string,
+  ctx: SegCtx,
+  isListItem: boolean,
+  isOrdered = false,
+): MkuKind | null {
+  const afterPrefix = stripListPrefix(raw)
+  const bold = boldLeadOf(afterPrefix)
+  const plain = stripMarkers(afterPrefix)
+
+  if (CUES.exerciseStart.test(plain)) return 'exercise'
+  if (CUES.exampleStart.test(plain)) return 'exampleProblem'
+  if (CUES.solutionStart.test(plain)) return 'exampleSolution'
+  if (bold && CUES.stepLead.test(bold.lead)) {
+    return ctx.inDerivation ? 'derivationStep' : 'exampleSolution'
+  }
+  // 例题/推导区内的有序列表 = 步骤链（`**【详细解题步骤】**：` + `1. **分析**：…`）
+  if (isListItem && isOrdered && (ctx.inExample || ctx.inDerivation)) {
+    return ctx.inExample ? 'exampleSolution' : 'derivationStep'
+  }
+  if (ctx.inExample) return 'exampleProblem'
+  if (CUES.cautionStart.test(plain) || (bold && CUES.cautionCue.test(bold.lead))) return 'caution'
+  if (CUES.propStart.test(plain)) return 'property'
+  if (ctx.inDerivation || (isListItem && CUES.derivStart.test(plain))) return 'derivationStep'
+  if (CUES.defCue.test(plain)) return 'definition'
+  if (bold && CUES.defLead.test(bold.lead)) return 'definition'
+  if (ctx.section === 'definition' && (bold || isListItem)) return 'definition'
+  if (bold && CUES.propLead.test(bold.lead)) return 'property'
+  if (bold) return 'property'
+  if (ctx.section === 'property' && (bold || isListItem)) return 'property'
+  return null
+}
+
 export function segmentMkus(doc: ParsedDoc, sourcePath: string): Mku[] {
   const out: Mku[] = []
-  let inDerivation = false
-  let inExample = false
+  const ctx: SegCtx = { inDerivation: false, inExample: false, section: null }
 
   const push = (span: Span, kind: MkuKind, text: string, extra?: Partial<Mku>) => {
     const id = `${sourcePath}:${span.start}-${span.end}`
@@ -69,6 +117,12 @@ export function segmentMkus(doc: ParsedDoc, sourcePath: string): Mku[] {
     'table',
     'code',
   ])
+
+  /** 区域开关随识别结果推进（与段落路径行为一致） */
+  const applyRegionSwitch = (kind: MkuKind | null) => {
+    if (kind === 'exampleProblem') ctx.inExample = true
+    else if (kind === 'exercise') ctx.inExample = false
+  }
 
   const blocks = doc.blocks
   let i = 0
@@ -108,22 +162,54 @@ export function segmentMkus(doc: ParsedDoc, sourcePath: string): Mku[] {
       return
     }
     if (block.kind === 'listItem') {
-      if (inDerivation || /^(由|因为|所以|因此|两式|化简|代入)/.test(block.text)) {
-        push(block.span, 'derivationStep', block.text)
-      } else {
-        push(block.span, 'background', block.text)
-      }
+      const parentList = doc.blocks.find(
+        (x) =>
+          x.kind === 'list' && x.span.start <= block.span.start && block.span.end <= x.span.end,
+      )
+      const isOrdered = !!parentList?.meta.ordered
+      const kind = resolveKind(block.text, ctx, true, isOrdered)
+      applyRegionSwitch(kind)
+      push(block.span, kind ?? 'background', block.text)
+      return
+    }
+    if (block.kind === 'blockquote') {
+      const plain = stripMarkers(stripListPrefix(block.text))
+      push(block.span, CUES.cautionCue.test(plain) ? 'caution' : 'background', block.text)
+      return
+    }
+    if (block.kind === 'table') {
+      // 性质/考点/题型区的表格是知识本体（性质表、解题策略表），归相关知识层
+      const teachable = ctx.section === 'property' || ctx.section === 'definition' || ctx.inExample
+      push(block.span, teachable ? 'property' : 'background', block.text)
       return
     }
     push(block.span, 'background', block.text)
   }
 
   function processBlock(block: (typeof blocks)[number]) {
-    if (block.kind === 'frontmatter' || block.kind === 'heading') {
-      if (block.kind === 'heading' && /证明|推导|引理/.test(block.text)) inDerivation = true
-      else if (block.kind === 'heading') {
-        inDerivation = false
-        inExample = false
+    if (block.kind === 'frontmatter') return
+    if (block.kind === 'heading') {
+      const plain = stripMarkers(block.text)
+      if (CUES.derivHeading.test(plain)) {
+        ctx.inDerivation = true
+        ctx.inExample = false
+        ctx.section = null
+      } else if (CUES.exampleHeading.test(plain)) {
+        ctx.inExample = true
+        ctx.inDerivation = false
+        ctx.section = null
+      } else if (CUES.defHeading.test(plain)) {
+        ctx.section = 'definition'
+        ctx.inDerivation = false
+        ctx.inExample = false
+      } else if (CUES.propHeading.test(plain)) {
+        ctx.section = 'property'
+        ctx.inDerivation = false
+        ctx.inExample = false
+      } else {
+        ctx.inDerivation = false
+        ctx.inExample = false
+        ctx.section = null
       }
       return
     }
@@ -148,37 +234,9 @@ export function segmentMkus(doc: ParsedDoc, sourcePath: string): Mku[] {
     if (stripped.trim().length === 0) return // 纯公式段落已处理
     const text = block.text
 
-    if (/^\s*(练习|习题|思考|作业|巩固)/.test(text)) {
-      inExample = false
-      push(block.span, 'exercise', text)
-      return
-    }
-    if (/^\s*(例\s*\d*|例题|【例)/.test(text)) {
-      inExample = true
-      push(block.span, 'exampleProblem', text)
-      return
-    }
-    if (/^\s*解\s*[:：]/.test(text)) {
-      push(block.span, 'exampleSolution', text)
-      return
-    }
-    if (inExample) {
-      push(block.span, 'exampleProblem', text)
-      return
-    }
-    if (/^\s*(注意|易错|常见错误|小心|警示)/.test(text)) {
-      push(block.span, 'caution', text)
-      return
-    }
-    if (/^\s*(其中|记|设|令|性质|特点|特征)/.test(text)) {
-      push(block.span, 'property', text)
-      return
-    }
-    if (/定义为|是指|称之为|叫做|所谓|【定义】|定义\s*[:：]/.test(text)) {
-      push(block.span, 'definition', text)
-      return
-    }
-    push(block.span, 'background', text)
+    const kind = resolveKind(text, ctx, false)
+    applyRegionSwitch(kind)
+    push(block.span, kind ?? 'background', text)
   }
 
   // %%注释%% → 作者注（背景层）
