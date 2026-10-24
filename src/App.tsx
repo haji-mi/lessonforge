@@ -28,6 +28,7 @@ import {
   renameLessonTitle,
   resolveConflict,
   saveEdit,
+  setLessonTypeManual,
   type LessonStatus,
 } from './core/persist/project'
 import type { LessonRecord, ProjectRecord, RevisionRecord } from './core/persist/db'
@@ -195,13 +196,15 @@ export default function App() {
     if (!project) return
     let compiled = 0
     let conflicts = 0
+    const failed: string[] = []
     for (const l of lessons) {
       try {
         const r = await compileAndStoreDraft(l.id)
         compiled++
         if (r.conflict) conflicts++
-      } catch {
-        // 单课时失败不阻断批次（B4 故障隔离）
+      } catch (e) {
+        // 单课时失败不阻断批次（B4 故障隔离），但必须点名报告（不允许静默吞错）
+        failed.push(`${l.title}：${e instanceof Error ? e.message : String(e)}`)
       }
     }
     await refreshLessons(project.id)
@@ -210,9 +213,13 @@ export default function App() {
       const cur = fresh.find((x) => x.id === selected.id)
       if (cur) await selectLesson(cur)
     }
-    setToast(
-      `批量编译完成：${compiled} 课时${conflicts > 0 ? `（${conflicts} 个存在待决冲突，默认保留用户版本）` : ''}`,
-    )
+    if (failed.length > 0) {
+      setToast(`批量编译：成功 ${compiled} 课时，失败 ${failed.length} 个——${failed.join('；')}`)
+    } else {
+      setToast(
+        `批量编译完成：${compiled} 课时${conflicts > 0 ? `（${conflicts} 个存在待决冲突，默认保留用户版本）` : ''}`,
+      )
+    }
   }
 
   async function batchExport() {
@@ -382,6 +389,12 @@ export default function App() {
                 revision={revision}
                 onAction={onAction}
                 onEditSection={onEditSection}
+                onSetType={async (t) => {
+                  if (!selected) return
+                  await setLessonTypeManual(selected.id, t)
+                  setToast(t ? '已人工指定课型（重编译后生效）' : '已恢复自动课型判定')
+                  await refreshSelected()
+                }}
                 onIncludeMku={async (mku) => {
                   if (!selected) return
                   try {

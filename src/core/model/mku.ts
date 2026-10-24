@@ -83,6 +83,10 @@ function resolveKind(
   if (bold && CUES.stepLead.test(bold.lead)) {
     return ctx.inDerivation ? 'derivationStep' : 'exampleSolution'
   }
+  // 加粗推导/证明引导（**【推导】**：、**证明**：）——例题区内按解答步骤
+  if (bold && CUES.derivLead.test(bold.lead)) {
+    return ctx.inExample ? 'exampleSolution' : 'derivationStep'
+  }
   // 例题/推导区内的有序列表 = 步骤链（`**【详细解题步骤】**：` + `1. **分析**：…`）
   if (isListItem && isOrdered && (ctx.inExample || ctx.inDerivation)) {
     return ctx.inExample ? 'exampleSolution' : 'derivationStep'

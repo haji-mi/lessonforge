@@ -201,6 +201,16 @@ button.danger {
   margin: 10px 0;
   align-items: center;
 }
+.type-override {
+  font-size: 13px;
+  color: var(--muted, #888);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.type-override select {
+  font-size: 13px;
+}
 .wb-columns {
   display: flex;
   gap: 14px;

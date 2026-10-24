@@ -16,6 +16,7 @@ function fakePlan(title: string): LessonPlan {
     lessonPath: `课程/${title}.md`,
     type: 'concept',
     typeEvidence: [],
+    typeAmbiguous: false,
     compilerVersion: 1,
     promptSchemaVersion: 1,
     sections: [
@@ -27,7 +28,13 @@ function fakePlan(title: string): LessonPlan {
         traces: [{ file: `课程/${title}.md`, start: 0, end: 4 }],
       },
     ],
-    coverage: { coreTotal: 1, coreHandled: 1, uncovered: [], excluded: [] },
+    coverage: {
+      coreTotal: 1,
+      coreHandled: 1,
+      uncovered: [],
+      uncoveredRelated: [],
+      excluded: [],
+    },
     warnings: [],
     promptText: `【角色】你是一位高中数学老师…\n【课题】${title}`,
   }

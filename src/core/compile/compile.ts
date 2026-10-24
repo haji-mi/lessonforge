@@ -6,11 +6,14 @@
  * - C 新增知识：第一版不实现生成（T2 默认零）；任何 C 段须经逐条人工批准（T3）。
  * - 环节池 + 内容可用性驱动（非固定模板）；内容不足 → 省略 + 注记，绝不编造。
  * - 护栏：环节间 span 重叠 >60% 去重、长度软预算警告、未纳入清单（K1 三态）。
+ * - K3（2026-10-24）：混合课型兜底——未被覆盖的核心 MKU 以「补充·kind」环节纳入；
+ *   related 层未纳入显式报告（uncoveredRelated），不再静默丢弃。
  */
 import { COMPILER_VERSION, PROMPT_SCHEMA_VERSION } from '../version'
 import type { LessonType, TypeDecision } from '../classify/type'
 import type { Mku } from '../model/mku'
 import { computeCoverage } from '../model/mku'
+import { stripListPrefix } from '../model/cues'
 import type { ParsedDoc } from '../parse/parse'
 import type { Span } from '../types'
 
@@ -52,6 +55,8 @@ export interface LessonPlan {
   lessonPath: string
   type: LessonType
   typeEvidence: string[]
+  /** 课型判定分差过小（基线 §7：应提示人工确认） */
+  typeAmbiguous: boolean
   compilerVersion: number
   promptSchemaVersion: number
   sections: PromptSection[]
@@ -59,6 +64,8 @@ export interface LessonPlan {
     coreTotal: number
     coreHandled: number
     uncovered: Mku[]
+    /** 相关知识层（property/exercise/caution）未被纳入提示词的部分（可见即可补入） */
+    uncoveredRelated: Mku[]
     excluded: { mku: Mku; reason: string }[]
   }
   warnings: string[]
@@ -82,6 +89,21 @@ const TYPE_LABEL: Record<LessonType, string> = {
   derivation: '公式推导',
   example: '例题讲解',
   generic: '通用讲解',
+}
+
+/** 补充讲解环节的 kind 中文名（与人工补入的 role 风格一致） */
+const KIND_LABEL: Record<Mku['kind'], string> = {
+  definition: '核心定义',
+  formula: '公式',
+  derivationStep: '推导步骤',
+  exampleProblem: '例题',
+  exampleSolution: '解答步骤',
+  property: '性质',
+  caution: '易错提醒',
+  exercise: '练习',
+  code: '代码',
+  background: '背景材料',
+  authorNote: '作者注',
 }
 
 class CompileError extends Error {}
@@ -159,8 +181,6 @@ export function compileLesson(input: CompileInput): LessonPlan {
   const settings = { ...DEFAULT_PROMPT_SETTINGS, ...input.settings }
   const { doc, mkus, type, lessonPath } = input
   const warnings: string[] = []
-  const text = mkus.length > 0 ? (doc.blocks[0] ? doc.blocks[0]!.text : '') : ''
-  void text
 
   const pick = (kind: Mku['kind']) => mkus.filter((m) => m.kind === kind)
   const sections: PromptSection[] = []
@@ -192,6 +212,12 @@ export function compileLesson(input: CompileInput): LessonPlan {
     }
     for (const e of examples) {
       sections.push(aSection(nextId(), '示例', e.text, e, lessonPath))
+    }
+    for (const c of pick('caution')) {
+      sections.push(aSection(nextId(), '易错提醒', c.text, c, lessonPath))
+    }
+    for (const e of pick('exercise')) {
+      sections.push(aSection(nextId(), '同类练习', e.text, e, lessonPath))
     }
     if (settings.interaction !== 'low' && defs.length > 0) {
       sections.push(
@@ -275,8 +301,14 @@ export function compileLesson(input: CompileInput): LessonPlan {
         ),
       )
     }
-    for (const p of props.filter((x) => /^(其中|记|设|令)/.test(x.text))) {
+    // 变量说明判定在净化文本上（列表项原文含 `- `/`1. ` 前缀）
+    const varProps = props.filter((x) => /^(其中|记|设|令)/.test(stripListPrefix(x.text)))
+    for (const p of varProps) {
       sections.push(aSection(nextId(), '变量说明', p.text, p, lessonPath))
+    }
+    // 其余性质（运算律/公式性质等）是推导课的重要讲解内容，不再静默丢弃
+    for (const p of props.filter((x) => !varProps.includes(x))) {
+      sections.push(aSection(nextId(), '性质与运算律', p.text, p, lessonPath))
     }
     for (const c of pick('caution')) {
       sections.push(aSection(nextId(), '易错提醒', c.text, c, lessonPath))
@@ -315,6 +347,10 @@ export function compileLesson(input: CompileInput): LessonPlan {
     }
     for (const c of cautions) {
       sections.push(aSection(nextId(), '易错点', c.text, c, lessonPath))
+    }
+    // 相关知识（性质/结论/口诀）——例题课的取材补充，不再静默丢弃
+    for (const p of pick('property')) {
+      sections.push(aSection(nextId(), '相关知识', p.text, p, lessonPath))
     }
     if (exercises.length > 0) {
       for (const e of exercises) {
@@ -364,6 +400,21 @@ export function compileLesson(input: CompileInput): LessonPlan {
     }
   }
 
+  // 混合课型兜底（K3）：按获胜课型取材后，仍未被任何 A 段覆盖的核心 MKU
+  // 以「补充·kind」环节按原文顺序纳入——混合课时（定义+例题+推导并存）的知识
+  // 不再整批落入未纳入清单；未纳入清单只保留用户显式排除与结构异常场景。
+  {
+    const coveredSpans = sections
+      .filter((s) => s.contentType === 'A')
+      .flatMap((s) => s.traces.map((t) => ({ start: t.start, end: t.end })))
+    const covered = (m: Mku) =>
+      coveredSpans.some((s) => s.start < m.span.end && m.span.start < s.end)
+    for (const m of mkus) {
+      if (m.tier !== 'core' || covered(m)) continue
+      sections.push(aSection(nextId(), `补充·${KIND_LABEL[m.kind]}`, m.text, m, lessonPath))
+    }
+  }
+
   // 护栏：去重 + 长度预算
   const deduped = dedupeSections(sections, warnings)
   const totalLen = deduped.reduce((s, x) => s + sectionText(x).length, 0)
@@ -406,6 +457,9 @@ export function compileLesson(input: CompileInput): LessonPlan {
   const uncovered = coverage
     .filter((c) => c.state === 'uncovered' && c.mku.tier === 'core')
     .map((c) => c.mku)
+  const uncoveredRelated = coverage
+    .filter((c) => c.state === 'uncovered' && c.mku.tier === 'related')
+    .map((c) => c.mku)
   const excluded = coverage
     .filter((c) => c.state === 'excluded')
     .map((c) => ({ mku: c.mku, reason: c.reason ?? '' }))
@@ -418,6 +472,7 @@ export function compileLesson(input: CompileInput): LessonPlan {
     lessonPath,
     type: t,
     typeEvidence: type.evidence,
+    typeAmbiguous: type.ambiguous,
     compilerVersion: COMPILER_VERSION,
     promptSchemaVersion: PROMPT_SCHEMA_VERSION,
     sections: deduped,
@@ -425,6 +480,7 @@ export function compileLesson(input: CompileInput): LessonPlan {
       coreTotal: coreEntries.length,
       coreHandled: coreEntries.length - uncovered.length,
       uncovered,
+      uncoveredRelated,
       excluded,
     },
     warnings,

@@ -1,10 +1,18 @@
 /** 课时工作台：文件树 + 原文预览 + 提示词编辑器（溯源并排/覆盖面板/冲突裁决/审批/导出） */
 import { useEffect, useMemo, useState } from 'react'
 import type { LessonPlan, PromptSection } from '../core/compile/compile'
+import type { LessonType } from '../core/classify/type'
 import { parseDoc } from '../core/parse/parse'
 import { getCurrentRevision, getEffectivePlan, type LessonStatus } from '../core/persist/project'
 import type { LessonRecord, RevisionRecord } from '../core/persist/db'
 import { MarkdownView } from './MarkdownView'
+
+const TYPE_OPTIONS: { value: LessonType; label: string }[] = [
+  { value: 'concept', label: '概念理解' },
+  { value: 'derivation', label: '公式推导' },
+  { value: 'example', label: '例题讲解' },
+  { value: 'generic', label: '通用讲解' },
+]
 
 export interface LessonWorkbenchProps {
   lesson: LessonRecord
@@ -13,6 +21,7 @@ export interface LessonWorkbenchProps {
   revision: RevisionRecord | null
   onAction: (action: string, payload?: unknown) => void
   onEditSection: (sectionId: string, content: string) => void
+  onSetType: (type: LessonType | null) => void
   onJumpTrace: (section: PromptSection) => void
   onIncludeMku: (mku: {
     id: string
@@ -31,6 +40,7 @@ export function LessonWorkbench(props: LessonWorkbenchProps) {
     revision,
     onAction,
     onEditSection,
+    onSetType,
     onJumpTrace,
     onIncludeMku,
   } = props
@@ -48,6 +58,27 @@ export function LessonWorkbench(props: LessonWorkbenchProps) {
           {lesson.normPath} · 章节 {lesson.chapter}
         </div>
         <div className="wb-actions">
+          <label className="type-override">
+            课型{' '}
+            <select
+              value={lesson.typeManual ?? ''}
+              onChange={(e) => onSetType((e.target.value || null) as LessonType | null)}
+              title="人工覆盖课型判定（留空=自动）"
+            >
+              <option value="">
+                自动
+                {effective
+                  ? `（${TYPE_OPTIONS.find((t) => t.value === effective.plan.type)?.label ?? effective.plan.type}）`
+                  : ''}
+              </option>
+              {TYPE_OPTIONS.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                  {lesson.typeManual === t.value ? '（已指定）' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
           <button onClick={() => onAction('compile')}>{effective ? '重新编译' : '编译'}</button>
           {status.hasCandidate ? (
             <>
@@ -70,6 +101,11 @@ export function LessonWorkbench(props: LessonWorkbenchProps) {
         ) : null}
         {status.staleCompiler ? (
           <div className="warn-text">编译器已升级，草稿由旧版生成</div>
+        ) : null}
+        {effective?.plan.typeAmbiguous ? (
+          <div className="warn-text">
+            课型判定分差过小（候选课型得分接近），结果可能不稳——建议用上方「课型」下拉人工确认后重编译
+          </div>
         ) : null}
       </div>
 
@@ -222,6 +258,23 @@ function CoveragePanel({
             </li>
           ))}
         </ul>
+      ) : null}
+      {plan.coverage.uncoveredRelated.length > 0 ? (
+        <details>
+          <summary className="warn-text">
+            相关知识块未纳入 {plan.coverage.uncoveredRelated.length} 个（性质/练习/提醒，可补入）
+          </summary>
+          <ul>
+            {plan.coverage.uncoveredRelated.map((m) => (
+              <li key={m.id} className="uncovered-item">
+                [{m.kind}] {m.text.slice(0, 60)}…{' '}
+                <button className="link" onClick={() => onInclude(m)}>
+                  补入提示词
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
       {plan.coverage.excluded.length > 0 ? (
         <div className="muted">
