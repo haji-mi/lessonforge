@@ -44,7 +44,7 @@ import {
 } from './ui/LessonPanel'
 import { AiSettingsDialog } from './ui/AiSettingsDialog'
 import { runBatchTransform, type BatchLessonInput } from './ai/batch'
-import { loadAiSettings } from './ai/settings'
+import { loadAiSettings, isAiConfigured } from './ai/settings'
 
 type Screen = 'welcome' | 'import' | 'structure-confirm' | 'main'
 
@@ -295,8 +295,8 @@ export default function App() {
   /** 勾选课时 → 逐篇 AI 转化（顺序 + 篇间隔限流；单篇失败不阻断，结束点名报告） */
   async function batchAi() {
     if (!project || aiBatch?.running) return
-    if (!loadAiSettings().apiKey) {
-      setToast('未配置 API Key——点击顶部「AI 设置」')
+    if (!isAiConfigured(loadAiSettings())) {
+      setToast('当前 AI 供应商未配置 API Key——点击顶部「AI 设置」')
       return
     }
     const targets = lessons.filter((l) => checked.has(l.id))

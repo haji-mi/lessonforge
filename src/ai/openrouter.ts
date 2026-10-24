@@ -1,7 +1,8 @@
 /**
- * OpenRouter 客户端（ai 边界层）：免费模型按序回退。
- * 2026-10-24 实测：免费模型可用性逐日波动（429 限流/上游 404/空回复均出现），
- * 故内置「实测可用优先」的回退序列；仅 401（密钥无效）视为致命错误立即终止。
+ * OpenAI 兼容端点客户端（ai 边界层，主用于 OpenRouter / 英伟达 NIM / 自定义端点）：
+ * 免费模型按序回退。2026-10-24 实测：免费模型可用性逐日波动（429 限流/上游 404/
+ * 空回复均出现），故内置「实测可用优先」的回退序列；仅 401（密钥无效）视为致命
+ * 错误立即终止。
  */
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -181,4 +182,21 @@ export async function pingOpenRouter(opts: Omit<CallOptions, 'messages'>): Promi
     temperature: 0,
     timeoutMs: opts.timeoutMs ?? 60_000,
   })
+}
+
+/** 拉取端点模型列表（OpenAI 兼容 GET /models；用于英伟达/自定义供应商） */
+export async function listModels(opts: {
+  apiKey: string
+  baseUrl?: string
+  fetchImpl?: typeof fetch
+}): Promise<string[]> {
+  const fetchImpl = opts.fetchImpl ?? fetch
+  const res = await fetchImpl(`${opts.baseUrl ?? 'https://openrouter.ai/api/v1'}/models`, {
+    headers: { Authorization: `Bearer ${opts.apiKey}` },
+  })
+  if (!res.ok) throw new AiError(`HTTP ${res.status}：拉取模型列表失败`, true)
+  const j = (await res.json()) as { data?: { id?: string }[] }
+  const ids = (j.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string')
+  if (ids.length === 0) throw new AiError('端点未返回任何模型', true)
+  return ids
 }

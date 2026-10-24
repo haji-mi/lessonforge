@@ -73,3 +73,27 @@
   40s 完成，toast「1 篇全部成功」；缓存落盘（mode=rewrite，nemotron-3-ultra，1706 字）；
   打开该课时 AI 面板即见缓存结果。**保真抽查**：产出开头的「倒数→逆矩阵」类比经核对
   确为原文内容（非编造）。
+
+## 6. 多供应商（同日第二次追加：自定义 API / 英伟达 NIM / OpenCode 探测）
+
+需求：用户要能自接 API、或用英伟达免费 API、或借用本机 OpenCode 额度。
+
+- **英伟达 NIM**：Key（用户提供，CCSwitch 内存有）实测有效（GET /models 85 个模型）；
+  chat 实测 200。**浏览器直连被 CORS 拦截**（响应无 Access-Control-Allow-Origin）→
+  vite dev/preview 增加 `/nim` 同源代理转发 integrate.api.nvidia.com（vite.config.ts nimProxy）。
+  预设模型 3 个（nemotron-3-ultra/super/llama-70b），按序回退。
+- **自定义供应商**：OpenAI 兼容端点（baseUrl+Key+拉取模型列表），支持本地 Ollama 等；
+  未真实验证（用户未提供端点），单测覆盖解析/回退路径。
+- **OpenCode（如实结论：暂不可用）**：本机 OpenCode 1.19.3 的 credential 表仅有两份
+  GitHub Copilot OAuth（device 流，非静态 Key，无法直接填入）；`opencode serve` 启动失败
+  （「Database is not empty and has no session table」，库 schema 冲突）。设置对话框内
+  如实说明，未提供假通路。
+- **settings v2**：`{provider, providers: {openrouter|nvidia|custom: {apiKey, model, baseUrl, modelList}}}`；
+  各供应商独立保存（切换不丢）；v1 单供应商记录自动迁移为 openrouter 配置；
+  env 预置 `VITE_OPENROUTER_API_KEY` / `VITE_NVIDIA_API_KEY`（.env.local，gitignored）。
+- **CSP 调整**：connect-src 放宽为 `'self' https: http://localhost:* http://127.0.0.1:*`
+  （供应商自选与本地 LLM 所需，基线 §13 修订 8 补记）；其余资源仍零外联。
+- 自动化：246/246 全绿（+listModels、多供应商设置/迁移、resolveModels、nvidia 代理路径断言）。
+- **真实验收**（浏览器 + 生产构建 + /nim 代理）：设置对话框切英伟达 → Key 自动预置 →
+  测试连接 4s 返回「连通正常」→ 保存 → 批量勾选「2-5 分块矩阵」（未编译，rewrite）→
+  28s 成功 2917 字，缓存 model=nvidia/nemotron-3-ultra-550b-a55b（NIM 端点，非 OpenRouter）。

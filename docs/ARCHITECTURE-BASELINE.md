@@ -155,7 +155,7 @@
 ## 10. 安全
 
 - 生产构建 CSP（仅 self + blob:/data: 资源），开发环境豁免；E2E 断言非 localhost 请求数 = 0。
-- **AI 外联例外（2026-10-24）**：`connect-src` 额外放行 `https://openrouter.ai`（唯一例外域）。AI 请求仅在用户显式操作（运行转化/测试连接）时发起；密钥存本机（.env.local 构建期注入或 localStorage），不落 IndexedDB 主数据链；AI 输出恒为建议稿，不自动写入 PromptDraft/overlay（U1 不变）。E2E 的"非 localhost 请求数 = 0"断言相应改为"除 openrouter.ai 外 = 0"（用户未触发 AI 时仍为 0）。
+- **AI 外联例外（2026-10-24，同日两次修订）**：`connect-src` 放行 `https:` 与本机 `http://localhost:*`/`127.0.0.1:*`（供应商自选：OpenRouter/英伟达 NIM/自定义 OpenAI 兼容端点含本地模型）。英伟达 NIM 浏览器直连被 CORS 拦截，经 vite dev/preview 同源代理 `/nim` 转发。AI 请求仅在用户显式操作（运行转化/测试连接）时发起；密钥存本机（.env.local 构建期注入或 localStorage），不落 IndexedDB 主数据链；AI 输出恒为建议稿，不自动写入 PromptDraft/overlay（U1 不变）。E2E 的"非 localhost 请求数 = 0"断言相应改为"除 openrouter.ai 外 = 0"（用户未触发 AI 时仍为 0）。
 - 第一版不渲染行内 HTML（⚠ 级，源码显示）；KaTeX `trust:false`；无 dangerouslySetInnerHTML（KaTeX 输出除外）。
 - 源文件零写入（应用对导入文件只读）。
 
@@ -199,4 +199,4 @@
 5. U+FFFD 计数公式由分段映射拼接全等断言取代（B2）。
 6. "硬内存预算"表述撤回：spike 证明前只声明"设计目标 + 拒收式保守策略"（§4.2 分支 C）。
 7. Prettier 纳入 `format` 脚本与 check（`format:check`）。
-8. **ai 边界层新增（2026-10-24，用户需求）**：新增 `src/ai/**`（settings/openrouter/transform）与 UI（AiPanel/AiSettingsDialog）。定位：AI 是可选的「提示词转化建议」功能，不进入确定性编译链——编译层仍为 D（无 LLM），AI 输出仅在 AiPanel 审阅后由用户复制，不写回编译稿/overlay，不影响任何 T/K/U 不变量。免费模型逐日可用性波动（实测 429/上游 404/空回复），故按实测可用序列回退（仅 401 终止）；实测记录见 docs/ACCEPTANCE-AI-TRANSFORM.md。CSP 例外见 §10。
+8. **ai 边界层新增（2026-10-24，用户需求）**：新增 `src/ai/**`（settings/openrouter/transform）与 UI（AiPanel/AiSettingsDialog）。定位：AI 是可选的「提示词转化建议」功能，不进入确定性编译链——编译层仍为 D（无 LLM），AI 输出仅在 AiPanel 审阅后由用户复制，不写回编译稿/overlay，不影响任何 T/K/U 不变量。免费模型逐日可用性波动（实测 429/上游 404/空回复），故按实测可用序列回退（仅 401 终止）；实测记录见 docs/ACCEPTANCE-AI-TRANSFORM.md。CSP 例外见 §10。同日追加多供应商（settings v2 + `/nim` 代理）与勾选批量，见 docs/ACCEPTANCE-AI-TRANSFORM.md §5–§6；OpenCode 额度借用经实测不可行（仅存 Copilot OAuth + serve 启动失败），在设置 UI 如实说明。

@@ -13,7 +13,7 @@ import {
   type AiTransformMode,
   type TransformResult,
 } from '../ai/transform'
-import { loadAiSettings } from '../ai/settings'
+import { loadAiSettings, isAiConfigured } from '../ai/settings'
 
 export interface AiPanelProps {
   lessonId: string
@@ -51,7 +51,7 @@ export function AiPanel(props: AiPanelProps) {
   }, [lessonId, promptText, noteText])
 
   const sourceText = mode === 'polish' ? promptText : noteText
-  const configured = loadAiSettings().apiKey.length > 0
+  const configured = isAiConfigured(loadAiSettings())
 
   async function run() {
     if (!sourceText) {

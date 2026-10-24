@@ -13,7 +13,7 @@ K3：对用户真实库全管线诊断出 10 类问题（占位/未纳入/静默
 AI 转化：工作台面板把编译稿/原文笔记交给 OpenRouter 免费模型生成「建议稿」（不写回编译稿），
 多模型回退 + 显式触发省额度，CSP 唯一例外域 openrouter.ai，详见 docs/ACCEPTANCE-AI-TRANSFORM.md。
 
-- 测试：**239/239 全绿**（含新增 ai-openrouter 21 + ai-batch 6，全 mock 零真实网络）；`npm run check`（typecheck+lint+format+test）退出码 0。
+- 测试：**246/246 全绿**（ai-openrouter 26 + ai-batch 6，全 mock 零真实网络）；`npm run check`（typecheck+lint+format+test）退出码 0。
 - 真实数据验收：20 文件只读复刻管线复测——转写 0、硬失败 0、核心未纳入 0、related 未纳入 0；
   2-1 定义占位与 2-4 推导占位消失；2-2 标记 ambiguous（新 UI 提示人工确认课型）。
 - 应用内真实验收（会话 E）：生产构建下真实调用成功（nemotron-3-ultra 75s 一次成功，920 字产出），
@@ -54,6 +54,10 @@ AI 转化：工作台面板把编译稿/原文笔记交给 OpenRouter 免费模�
   src/ai/batch.ts 顺序执行（篇间 2.5s 限流间隔）+ 单篇失败不阻断 + confirm 明示额度；
   未编译走重写/已编译走润色；结果按课时缓存。真实验收（用户线性代数题库 1 篇）40s 成功，
   保真抽查通过（见 ACCEPTANCE-AI-TRANSFORM §5）。测试 239/239。
+- **AI 多供应商**（2026-10-24 三追加，用户点名）：自定义 OpenAI 兼容端点 / 英伟达 NIM
+  （vite `/nim` 同源代理，直连 CORS 拦）/ OpenRouter；settings v2 各供应商独立保存 + v1 迁移；
+  拉取模型列表 + 按列表回退。OpenCode 借用额度经实测不可行（仅 Copilot OAuth + serve 损坏），
+  UI 如实说明。真实验收：NIM 测试连接 4s + 批量 1 篇 28s 成功（2917 字）。测试 246/246。
 
 ## 待办池（按优先级；会话 B 从这里领任务）
 

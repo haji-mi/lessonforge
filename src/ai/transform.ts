@@ -5,7 +5,7 @@
  */
 import type { ChatMessage } from './openrouter'
 import { chatWithFallback, type AttemptLog } from './openrouter'
-import { loadAiSettings } from './settings'
+import { activeProvider, loadAiSettings } from './settings'
 
 export type AiTransformMode = 'polish' | 'rewrite'
 
@@ -68,19 +68,39 @@ export interface TransformResult {
   at: number
 }
 
+/**
+ * 供应商感知的模型序列（纯函数）：
+ * - openrouter 且 model='auto'（或空）→ 'builtin'（chatWithFallback 内置 FREE_MODELS 回退）
+ * - 指定了 model → 单模型；否则 modelList 顺序回退（nvidia 预设 / 自定义拉取）
+ */
+export function resolveModels(
+  provider: string,
+  cfg: { model: string; modelList: string[] },
+): string[] | 'builtin' {
+  if (provider === 'openrouter' && (!cfg.model || cfg.model === 'auto')) return 'builtin'
+  if (cfg.model) return [cfg.model]
+  return cfg.modelList
+}
+
 /** 编排入口：读设置 → 按模式构建消息 → 多模型回退调用 */
 export async function aiTransformLesson(
   input: TransformInput,
   extra?: { fetchImpl?: typeof fetch },
 ): Promise<TransformResult> {
   const settings = loadAiSettings()
-  if (!settings.apiKey) {
-    throw new Error('未配置 API Key——请点击顶部「AI 设置」填入 OpenRouter 密钥')
+  const cfg = activeProvider(settings)
+  if (!cfg.apiKey) {
+    throw new Error('当前供应商未配置 API Key——请点击顶部「AI 设置」填写')
   }
-  const models = settings.model === 'auto' ? undefined : [settings.model]
+  const resolved = resolveModels(settings.provider, cfg)
+  let models: string[] | undefined
+  if (resolved === 'builtin') models = undefined
+  else if (resolved.length === 0) {
+    throw new Error('未选择模型——请到「AI 设置」选择模型或拉取模型列表')
+  } else models = resolved
   const r = await chatWithFallback({
-    apiKey: settings.apiKey,
-    baseUrl: settings.baseUrl,
+    apiKey: cfg.apiKey,
+    baseUrl: cfg.baseUrl,
     models,
     messages: buildTransformMessages(input),
     maxTokens: 4096,

@@ -8,9 +8,16 @@ import {
   FREE_MODELS,
   chatWithFallback,
   cleanContent,
+  listModels,
   pingOpenRouter,
 } from '../src/ai/openrouter'
-import { ENV_API_KEY, loadAiSettings, saveAiSettings, isAiConfigured } from '../src/ai/settings'
+import {
+  ENV_API_KEY,
+  ENV_NVIDIA_API_KEY,
+  loadAiSettings,
+  saveAiSettings,
+  isAiConfigured,
+} from '../src/ai/settings'
 import {
   MAX_INPUT_CHARS,
   aiTransformLesson,
@@ -18,6 +25,7 @@ import {
   capInput,
   fingerprint,
   loadAiCache,
+  resolveModels,
   saveAiCache,
 } from '../src/ai/transform'
 
@@ -187,26 +195,89 @@ describe('pingOpenRouter：连通测试', () => {
   })
 })
 
-describe('AI 设置：localStorage + env 兜底', () => {
-  it('从未保存时回退 env 预置值；model 默认 auto', () => {
+describe('listModels：拉取模型列表', () => {
+  it('GET /models 并解析 id；非 2xx 报错', async () => {
+    const f = fetchSeq([
+      () =>
+        Promise.resolve(res(200, { data: [{ id: 'nvidia/a' }, { id: 'nvidia/b' }, { no: 'x' }] })),
+      () => Promise.resolve(res(403, { error: { message: 'denied' } })),
+    ])
+    const ids = await listModels({ apiKey: 'k', baseUrl: '/nim', fetchImpl: f })
+    expect(ids).toEqual(['nvidia/a', 'nvidia/b'])
+    const url = (f.mock.calls[0]![0] as string).endsWith('/models') ? 'ok' : 'bad'
+    expect(url).toBe('ok')
+    await expect(listModels({ apiKey: 'k', baseUrl: '/nim', fetchImpl: f })).rejects.toThrow('403')
+  })
+})
+
+describe('AI 设置 v2：多供应商 + env 兜底 + v1 迁移', () => {
+  it('从未保存时：默认 openrouter，Key 用 env；nvidia 用 env；custom 空', () => {
     stubLs()
     const s = loadAiSettings()
-    expect(s.apiKey).toBe(ENV_API_KEY)
-    expect(s.model).toBe('auto')
-    expect(s.baseUrl).toBe('https://openrouter.ai/api/v1')
+    expect(s.provider).toBe('openrouter')
+    expect(s.providers.openrouter.apiKey).toBe(ENV_API_KEY)
+    expect(s.providers.openrouter.model).toBe('auto')
+    expect(s.providers.nvidia.apiKey).toBe(ENV_NVIDIA_API_KEY)
+    expect(s.providers.nvidia.baseUrl).toBe('/nim')
+    expect(s.providers.nvidia.modelList.length).toBeGreaterThan(0)
+    expect(s.providers.custom.apiKey).toBe('')
   })
-  it('保存后读取一致；显式清空不再回退 env', () => {
+  it('保存往返一致；各供应商独立（切换不丢）', () => {
     stubLs()
-    saveAiSettings({ apiKey: 'sk-or-v1-x', model: 'm/a', baseUrl: 'https://x/api/v1' })
-    expect(loadAiSettings()).toEqual({
-      apiKey: 'sk-or-v1-x',
-      model: 'm/a',
-      baseUrl: 'https://x/api/v1',
+    const s = loadAiSettings()
+    s.providers.openrouter.apiKey = 'sk-or-v1-x'
+    s.providers.custom = {
+      apiKey: 'dk-1',
+      model: 'deepseek-chat',
+      baseUrl: 'https://api.deepseek.com/v1',
+      modelList: ['deepseek-chat'],
+    }
+    s.provider = 'custom'
+    saveAiSettings(s)
+    const back = loadAiSettings()
+    expect(back.provider).toBe('custom')
+    expect(back.providers.custom.baseUrl).toBe('https://api.deepseek.com/v1')
+    expect(back.providers.openrouter.apiKey).toBe('sk-or-v1-x') // 未被 custom 覆盖
+    expect(isAiConfigured(back)).toBe(true)
+  })
+  it('显式清空当前供应商 Key：不再回退 env', () => {
+    stubLs()
+    const s = loadAiSettings()
+    s.providers.openrouter.apiKey = ''
+    saveAiSettings(s)
+    expect(isAiConfigured(loadAiSettings())).toBe(false)
+  })
+  it('v1 旧记录（单供应商字段）迁移为 openrouter 配置', () => {
+    const ls = stubLs()
+    ls.set(
+      'cc-ai-settings',
+      JSON.stringify({ apiKey: 'sk-or-v1-old', model: 'm/x', baseUrl: 'https://old/v1' }),
+    )
+    const s = loadAiSettings()
+    expect(s.provider).toBe('openrouter')
+    expect(s.providers.openrouter).toEqual({
+      apiKey: 'sk-or-v1-old',
+      model: 'm/x',
+      baseUrl: 'https://old/v1',
+      modelList: s.providers.openrouter.modelList,
     })
-    saveAiSettings({ apiKey: '', model: 'auto', baseUrl: 'https://openrouter.ai/api/v1' })
-    const cleared = loadAiSettings()
-    expect(cleared.apiKey).toBe('')
-    expect(isAiConfigured(cleared)).toBe(false)
+    expect(s.providers.nvidia.apiKey).toBe(ENV_NVIDIA_API_KEY)
+  })
+})
+
+describe('resolveModels：供应商感知的模型解析', () => {
+  it('openrouter auto/空 → builtin；指定模型 → 单元素', () => {
+    expect(resolveModels('openrouter', { model: 'auto', modelList: [] })).toBe('builtin')
+    expect(resolveModels('openrouter', { model: '', modelList: [] })).toBe('builtin')
+    expect(resolveModels('openrouter', { model: 'm/a', modelList: ['m/b'] })).toEqual(['m/a'])
+  })
+  it('nvidia/custom：指定模型优先，否则 modelList 顺序回退', () => {
+    expect(resolveModels('nvidia', { model: 'n/1', modelList: ['n/2'] })).toEqual(['n/1'])
+    expect(resolveModels('custom', { model: '', modelList: ['c/1', 'c/2'] })).toEqual([
+      'c/1',
+      'c/2',
+    ])
+    expect(resolveModels('custom', { model: '', modelList: [] })).toEqual([])
   })
 })
 
@@ -221,17 +292,39 @@ describe('aiTransformLesson 编排', () => {
   }
   it('未配置 Key：显式报错且零网络请求', async () => {
     stubLs()
-    saveAiSettings({ apiKey: '', model: 'auto', baseUrl: 'https://openrouter.ai/api/v1' })
+    const s = loadAiSettings()
+    s.providers.openrouter.apiKey = ''
+    saveAiSettings(s)
     const f = fetchSeq([])
     await expect(aiTransformLesson(input, { fetchImpl: f })).rejects.toThrow('API Key')
   })
-  it('配置后走回退调用并返回结果；settings 指定单模型时只试该模型', async () => {
+  it('nvidia 供应商：走 /nim 代理与预设模型序列；指定模型时只试该模型', async () => {
     stubLs()
-    saveAiSettings({
-      apiKey: 'sk-or-v1-y',
-      model: 'xingchen-agi/xing4.0-29b-a4b:free',
-      baseUrl: 'https://openrouter.ai/api/v1',
-    })
+    const s = loadAiSettings()
+    s.provider = 'nvidia'
+    s.providers.nvidia.model = 'nvidia/llama-3.1-nemotron-70b-instruct'
+    saveAiSettings(s)
+    const f = fetchSeq([() => Promise.resolve(ok('NIM 结果'))])
+    const r = await aiTransformLesson(input, { fetchImpl: f })
+    expect(r.text).toBe('NIM 结果')
+    expect(r.model).toBe('nvidia/llama-3.1-nemotron-70b-instruct')
+    expect(f.mock.calls[0]![0]).toBe('/nim/chat/completions')
+  })
+  it('custom 供应商无模型且列表空：明确报错', async () => {
+    stubLs()
+    const s = loadAiSettings()
+    s.provider = 'custom'
+    s.providers.custom = { apiKey: 'k', model: '', baseUrl: 'https://x/v1', modelList: [] }
+    saveAiSettings(s)
+    const f = fetchSeq([])
+    await expect(aiTransformLesson(input, { fetchImpl: f })).rejects.toThrow('未选择模型')
+  })
+  it('openrouter 指定单模型时只试该模型', async () => {
+    stubLs()
+    const s = loadAiSettings()
+    s.providers.openrouter.apiKey = 'sk-or-v1-y'
+    s.providers.openrouter.model = 'xingchen-agi/xing4.0-29b-a4b:free'
+    saveAiSettings(s)
     const f = fetchSeq([() => Promise.resolve(ok('AI 转化结果'))])
     const r = await aiTransformLesson(input, { fetchImpl: f })
     expect(r.text).toBe('AI 转化结果')
