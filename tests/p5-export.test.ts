@@ -54,7 +54,7 @@ describe('导出层', () => {
       chapter: '第1章',
       orderKey: 'L01',
     })
-    expect(md).toContain('Classroom Compiler 导出')
+    expect(md).toContain('LessonForge 导出')
     expect(md).toContain('课时：函数')
     expect(md).toContain('# 函数')
     expect(md).toContain('【课题】函数')

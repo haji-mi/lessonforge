@@ -100,7 +100,7 @@ async function chatOnce(
       headers: {
         Authorization: `Bearer ${opts.apiKey}`,
         'Content-Type': 'application/json',
-        'X-Title': 'Classroom Compiler',
+        'X-Title': 'LessonForge',
       },
       body: JSON.stringify({
         model,

@@ -492,7 +492,7 @@ export default function App() {
     return (
       <div className="app">
         <header className="app-header">
-          <h1>Classroom Compiler</h1>
+          <h1>LessonForge</h1>
           <span className="muted">Obsidian 课程 → 互动课堂提示词（本地运行 · 零上传）</span>
         </header>
         <div className="welcome">

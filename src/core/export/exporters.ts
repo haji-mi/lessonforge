@@ -23,7 +23,7 @@ export interface LessonExportMeta {
 /** 提示词文本（编辑后合成文本）→ 课时 Markdown 文档 */
 export function lessonToMarkdown(plan: LessonPlan, meta: LessonExportMeta): string {
   const header = [
-    `<!-- Classroom Compiler 导出 -->`,
+    `<!-- LessonForge 导出 -->`,
     `<!-- 课时：${meta.title} | 章节：${meta.chapter} | 课型：${plan.type} -->`,
     `<!-- 编译器 v${plan.compilerVersion}，脚手架 v${plan.promptSchemaVersion}；A 段可溯源至原笔记 -->`,
     '',

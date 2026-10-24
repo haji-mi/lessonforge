@@ -1,4 +1,4 @@
-# Classroom Compiler（Obsidian → 豆包爱学互动课堂编译器）
+# LessonForge（Obsidian → 豆包爱学互动课堂编译器）
 
 本地优先的 Markdown 课程解析与互动课堂提示词编译工具。把 Obsidian 课程资料转换为按课时组织的互动课堂提示词，可预览、编辑、复制后粘贴到豆包爱学。
 

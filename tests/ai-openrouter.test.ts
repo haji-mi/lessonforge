@@ -204,7 +204,7 @@ describe('chatWithFallback：多模型回退', () => {
     const init = f.mock.calls[0]![1] as RequestInit
     const headers = init.headers as Record<string, string>
     expect(headers.Authorization).toBe('Bearer sk-test')
-    expect(headers['X-Title']).toBe('Classroom Compiler')
+    expect(headers['X-Title']).toBe('LessonForge')
     const body = JSON.parse(init.body as string) as { model: string }
     expect(body.model).toBe(FREE_MODELS[0])
   })

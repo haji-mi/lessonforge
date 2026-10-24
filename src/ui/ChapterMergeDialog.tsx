@@ -197,7 +197,7 @@ export function ChapterMergeDialog({
       onToast('还没有整合稿——先点「整合本章」')
       return
     }
-    const header = `<!-- Classroom Compiler 按章整合 | 章节：${activeCh} | ${new Date(cache?.at ?? Date.now()).toLocaleString('zh-CN')} -->\n\n`
+    const header = `<!-- LessonForge 按章整合 | 章节：${activeCh} | ${new Date(cache?.at ?? Date.now()).toLocaleString('zh-CN')} -->\n\n`
     downloadBlob(
       new Blob([header + text], { type: 'text/markdown' }),
       `${sanitizeFileName(activeCh)}-整合提示词.md`,
