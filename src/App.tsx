@@ -35,8 +35,16 @@ import type { LessonRecord, ProjectRecord, RevisionRecord } from './core/persist
 import { getCurrentRevision } from './core/persist/project'
 import { inferStructure, type StructureCourse } from './core/structure/infer'
 import { ImportWizard, StructureConfirm } from './ui/ImportWizard'
-import { LessonTree, LessonWorkbench, TracePeek, loadLessonContext } from './ui/LessonPanel'
+import {
+  LessonTree,
+  LessonWorkbench,
+  TracePeek,
+  lessonTypeLabel,
+  loadLessonContext,
+} from './ui/LessonPanel'
 import { AiSettingsDialog } from './ui/AiSettingsDialog'
+import { runBatchTransform, type BatchLessonInput } from './ai/batch'
+import { loadAiSettings } from './ai/settings'
 
 type Screen = 'welcome' | 'import' | 'structure-confirm' | 'main'
 
@@ -54,6 +62,13 @@ export default function App() {
   const [trace, setTrace] = useState<{ start: number; end: number } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [showAiSettings, setShowAiSettings] = useState(false)
+  const [checked, setChecked] = useState<Set<string>>(new Set())
+  const [aiBatch, setAiBatch] = useState<{
+    running: boolean
+    done: number
+    total: number
+    current: string | null
+  } | null>(null)
 
   const refreshProjects = useCallback(async () => setProjects(await listProjects()), [])
   const refreshLessons = useCallback(async (projectId: string) => {
@@ -78,6 +93,7 @@ export default function App() {
   async function selectProject(p: ProjectRecord) {
     setProject(p)
     setSelected(null)
+    setChecked(new Set())
     const ls = await refreshLessons(p.id)
     if (ls.length > 0) await selectLesson(ls[0]!)
     setScreen('main')
@@ -259,6 +275,71 @@ export default function App() {
     setToast('项目 JSON 备份已下载（含原始字节与全部历史）')
   }
 
+  // ── 批量勾选 + AI 一键生成 ──
+
+  function toggleChecked(id: string) {
+    setChecked((prev) => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id)
+      else n.add(id)
+      return n
+    })
+  }
+
+  function toggleCheckAll() {
+    setChecked((prev) =>
+      prev.size === lessons.length ? new Set() : new Set(lessons.map((l) => l.id)),
+    )
+  }
+
+  /** 勾选课时 → 逐篇 AI 转化（顺序 + 篇间隔限流；单篇失败不阻断，结束点名报告） */
+  async function batchAi() {
+    if (!project || aiBatch?.running) return
+    if (!loadAiSettings().apiKey) {
+      setToast('未配置 API Key——点击顶部「AI 设置」')
+      return
+    }
+    const targets = lessons.filter((l) => checked.has(l.id))
+    if (targets.length === 0) {
+      setToast('未勾选任何课时')
+      return
+    }
+    if (
+      !confirm(
+        `将对勾选的 ${targets.length} 篇课时各发起至少 1 次 AI 请求（OpenRouter 免费档每日限额约 50 次，失败换模型会增多）。结果按课时缓存，可在各课时「AI 转化」面板查看。继续？`,
+      )
+    )
+      return
+    try {
+      const inputs: BatchLessonInput[] = []
+      for (const l of targets) {
+        const ctx = await loadLessonContext(l)
+        inputs.push({
+          lessonId: l.id,
+          title: l.title,
+          typeLabel: lessonTypeLabel(l.typeManual, ctx.effective?.plan.type),
+          promptText: ctx.effective?.plan.promptText ?? null,
+          noteText: ctx.revision?.text ?? null,
+        })
+      }
+      setAiBatch({ running: true, done: 0, total: inputs.length, current: null })
+      const r = await runBatchTransform(inputs, {
+        onProgress: (p) =>
+          setAiBatch({ running: true, done: p.done, total: p.total, current: p.currentTitle }),
+      })
+      const failed = r.outcomes.filter((o) => !o.ok)
+      setToast(
+        failed.length > 0
+          ? `AI 批量完成：成功 ${r.ok}，失败 ${failed.length}——${failed.map((f) => `${f.title}：${f.detail}`).join('；')}`
+          : `AI 批量完成：${r.ok} 篇全部成功（结果已缓存，到各课时「AI 转化」面板审阅/复制）`,
+      )
+    } catch (e) {
+      setToast(`AI 批量中断：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setAiBatch(null)
+    }
+  }
+
   async function restoreJson(file: File) {
     try {
       const newId = await importProjectJson(await file.text())
@@ -371,6 +452,25 @@ export default function App() {
       </header>
       <div className="main-columns">
         <aside className="sidebar">
+          <div className="sidebar-toolbar">
+            <button className="link" onClick={toggleCheckAll}>
+              {lessons.length > 0 && checked.size === lessons.length ? '清空' : '全选'}
+            </button>
+            <span className="muted">已勾选 {checked.size}</span>
+            <button
+              className="ai-batch-btn"
+              onClick={batchAi}
+              disabled={checked.size === 0 || (aiBatch?.running ?? false)}
+              title="对勾选课时逐篇调用 OpenRouter 免费模型生成提示词（顺序执行，结果缓存到各课时）"
+            >
+              {aiBatch?.running
+                ? `AI 批量中 ${aiBatch.done}/${aiBatch.total}…`
+                : `AI 一键生成（${checked.size}）`}
+            </button>
+          </div>
+          {aiBatch?.running && aiBatch.current ? (
+            <div className="muted sidebar-progress">当前：《{aiBatch.current}》</div>
+          ) : null}
           <LessonTree
             lessons={lessons}
             statuses={statuses}
@@ -379,6 +479,8 @@ export default function App() {
               const l = lessons.find((x) => x.id === id)
               if (l) selectLesson(l)
             }}
+            checkedIds={checked}
+            onToggleCheck={toggleChecked}
           />
         </aside>
         <main className="content">

@@ -533,3 +533,25 @@ mark {
 .ai-field .muted {
   margin-top: 4px;
 }
+
+/* ── 侧栏批量勾选 + AI 一键生成 ── */
+.sidebar-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--border);
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.sidebar-toolbar .ai-batch-btn {
+  margin-left: auto;
+}
+.sidebar-progress {
+  padding: 2px 0 6px;
+}
+.lesson-check {
+  margin-right: 4px;
+  vertical-align: middle;
+  cursor: pointer;
+}

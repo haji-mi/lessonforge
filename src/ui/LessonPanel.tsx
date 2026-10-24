@@ -320,17 +320,27 @@ function SourcePreview({ revision }: { revision: RevisionRecord }) {
   return <MarkdownView tree={doc.tree} model={model} />
 }
 
-/** 左侧课时树（章节分组 + 状态徽标） */
+/** 课时中文课型标签（批量 AI 等复用）：编译稿课型优先，其次人工指定，兜底通用 */
+export function lessonTypeLabel(typeManual: string | null, planType?: LessonType): string {
+  const t: LessonType = planType ?? (typeManual as LessonType | null) ?? 'generic'
+  return TYPE_OPTIONS.find((x) => x.value === t)?.label ?? '通用讲解'
+}
+
+/** 左侧课时树（章节分组 + 状态徽标 + 批量勾选） */
 export function LessonTree({
   lessons,
   statuses,
   selectedId,
   onSelect,
+  checkedIds,
+  onToggleCheck,
 }: {
   lessons: LessonRecord[]
   statuses: Map<string, LessonStatus>
   selectedId: string | null
   onSelect: (id: string) => void
+  checkedIds: Set<string>
+  onToggleCheck: (id: string) => void
 }) {
   const byChapter = useMemo(() => {
     const m = new Map<string, LessonRecord[]>()
@@ -353,6 +363,14 @@ export function LessonTree({
                 className={`lesson-row selectable ${selectedId === l.id ? 'selected' : ''}`}
                 onClick={() => onSelect(l.id)}
               >
+                <input
+                  type="checkbox"
+                  className="lesson-check"
+                  checked={checkedIds.has(l.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => onToggleCheck(l.id)}
+                  title="勾选后可用侧栏「AI 一键生成」批量转化"
+                />
                 📄 {l.title}{' '}
                 {st ? <span className={`chip chip-${st.uiState}`}>{st.uiState}</span> : null}
               </div>
