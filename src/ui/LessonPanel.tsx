@@ -1,10 +1,11 @@
 /** 课时工作台：文件树 + 原文预览 + 提示词编辑器（溯源并排/覆盖面板/冲突裁决/审批/导出/AI 转化） */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { LessonPlan, PromptSection } from '../core/compile/compile'
 import type { LessonType } from '../core/classify/type'
 import { parseDoc } from '../core/parse/parse'
 import { getCurrentRevision, getEffectivePlan, type LessonStatus } from '../core/persist/project'
 import type { LessonRecord, RevisionRecord } from '../core/persist/db'
+import { chapterCheckState, groupByChapter, rangeBetween } from './tree-selection'
 import { MarkdownView } from './MarkdownView'
 import { AiPanel } from './AiPanel'
 
@@ -231,6 +232,9 @@ function SectionEditor({
           <textarea
             value={draft}
             onChange={(e) => onDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') onCancel()
+            }}
             rows={Math.min(12, draft.split('\n').length + 1)}
           />
           <div>
@@ -326,7 +330,25 @@ export function lessonTypeLabel(typeManual: string | null, planType?: LessonType
   return TYPE_OPTIONS.find((x) => x.value === t)?.label ?? '通用讲解'
 }
 
-/** 左侧课时树（章节分组 + 状态徽标 + 批量勾选） */
+/** 一次滑选手势的状态：锚点行 + 方向值（锚点已勾→拖动=取消，未勾→拖动=勾上） */
+interface DragCheckState {
+  anchorId: string
+  value: boolean
+  /** 已真正进入拖拽（跨到过另一行）；未激活前松手 = 普通单击 */
+  active: boolean
+  lastId: string
+  pointerId: number
+}
+
+/**
+ * 左侧课时树（章节分组 + 状态徽标 + 批量勾选）。
+ * 多选交互：
+ * - 按住左键在课时行上滑动 → 锚点行决定方向（已勾=逐行取消 / 未勾=逐行勾上），跨章拖拽按视觉顺序覆盖中间章节全部课时；
+ * - Shift+点击勾选框/行 → [上次单点锚点..本行] 整段置为同一状态；Ctrl/Cmd+点击行 → 切换该行勾选不打开；
+ * - 章节行：点勾选框或章节名 = 本章节全选/全取消（部分勾选显示半选态）；点 ▸/▾ 折叠章节；
+ * - 树内键盘：↑↓ 移动焦点行、Space 勾选、Enter 打开、Ctrl+A 全选/清空。
+ * 仅响应鼠标滑选（pointerType==='mouse'），不劫持触屏/笔的滚动。
+ */
 export function LessonTree({
   lessons,
   statuses,
@@ -334,56 +356,265 @@ export function LessonTree({
   onSelect,
   checkedIds,
   onToggleCheck,
+  onSetCheckedMany,
 }: {
   lessons: LessonRecord[]
   statuses: Map<string, LessonStatus>
   selectedId: string | null
   onSelect: (id: string) => void
   checkedIds: Set<string>
-  onToggleCheck: (id: string) => void
+  onToggleCheck: (id: string, opts?: { shift?: boolean }) => void
+  onSetCheckedMany: (ids: string[], value: boolean) => void
 }) {
-  const byChapter = useMemo(() => {
-    const m = new Map<string, LessonRecord[]>()
-    for (const l of lessons) {
-      if (!m.has(l.chapter)) m.set(l.chapter, [])
-      m.get(l.chapter)!.push(l)
+  const ordered = useMemo(() => groupByChapter(lessons), [lessons])
+  const orderedIds = useMemo(
+    () => ordered.flatMap(([, items]) => items.map((l) => l.id)),
+    [ordered],
+  )
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  const [kbFocusId, setKbFocusId] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
+  const treeRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<DragCheckState | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const lastPtRef = useRef<{ x: number; y: number } | null>(null)
+  /** 拖拽结束后吞掉尾随 click（防止松手误打开课时/误切勾选） */
+  const suppressClickRef = useRef(false)
+  /** checkbox 的 change 事件不带修饰键，onClick（先于 change 触发）暂存 shift 状态 */
+  const lastShiftRef = useRef(false)
+
+  /** 折叠后可见的课时（键盘导航只走可见行） */
+  const visibleIds = useMemo(
+    () => ordered.flatMap(([ch, items]) => (collapsed.has(ch) ? [] : items.map((l) => l.id))),
+    [ordered, collapsed],
+  )
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
     }
-    return m
-  }, [lessons])
+  }, [])
+
+  useEffect(() => {
+    if (!kbFocusId) return
+    treeRef.current?.querySelector('.lesson-row.kb-focus')?.scrollIntoView({ block: 'nearest' })
+  }, [kbFocusId, collapsed])
+
+  function rowIdFromPoint(x: number, y: number): string | null {
+    const el = document.elementFromPoint(x, y)
+    const row = el instanceof Element ? el.closest('.lesson-row') : null
+    return row instanceof HTMLElement ? (row.dataset.id ?? null) : null
+  }
+
+  /** 把滑选范围应用到 [锚点..当前行]；首次跨行时激活拖拽并接管指针 */
+  function applyDragRange(id: string) {
+    const d = dragRef.current
+    if (!d || id === d.lastId) return
+    if (!d.active) {
+      d.active = true
+      setDragging(true)
+      try {
+        treeRef.current?.setPointerCapture(d.pointerId)
+      } catch {
+        /* 指针已释放等边缘情况：不影响已应用的勾选 */
+      }
+    }
+    d.lastId = id
+    onSetCheckedMany(rangeBetween(orderedIds, d.anchorId, id), d.value)
+  }
+
+  /** 指针贴近侧栏上下缘时持续滚动，滚动中指针不动、行在动，需重算当前行 */
+  function autoScrollStep() {
+    rafRef.current = null
+    const d = dragRef.current
+    const pt = lastPtRef.current
+    const box = treeRef.current?.closest('.sidebar')
+    if (!d || !pt || !(box instanceof HTMLElement)) return
+    const r = box.getBoundingClientRect()
+    const edge = 24
+    let dy = 0
+    if (pt.y < r.top + edge) dy = -Math.ceil((r.top + edge - pt.y) / 3)
+    else if (pt.y > r.bottom - edge) dy = Math.ceil((pt.y - (r.bottom - edge)) / 3)
+    if (dy === 0) return
+    box.scrollTop += dy
+    const id = rowIdFromPoint(pt.x, pt.y)
+    if (id) applyDragRange(id)
+    rafRef.current = requestAnimationFrame(autoScrollStep)
+  }
+
+  function endDrag() {
+    const d = dragRef.current
+    dragRef.current = null
+    setDragging(false)
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+    if (d?.active) {
+      suppressClickRef.current = true
+      window.setTimeout(() => {
+        suppressClickRef.current = false
+      }, 0)
+    }
+  }
+
+  function onTreePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    if (e.button !== 0 || e.pointerType !== 'mouse') return
+    const row = e.target instanceof Element ? e.target.closest('.lesson-row') : null
+    if (!(row instanceof HTMLElement) || !row.dataset.id) return
+    const id = row.dataset.id
+    dragRef.current = {
+      anchorId: id,
+      value: !checkedIds.has(id),
+      active: false,
+      lastId: id,
+      pointerId: e.pointerId,
+    }
+    lastPtRef.current = { x: e.clientX, y: e.clientY }
+  }
+
+  function onTreePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const d = dragRef.current
+    if (!d || e.pointerId !== d.pointerId) return
+    lastPtRef.current = { x: e.clientX, y: e.clientY }
+    const id = rowIdFromPoint(e.clientX, e.clientY)
+    if (id) applyDragRange(id)
+    if (d.active && rafRef.current == null) rafRef.current = requestAnimationFrame(autoScrollStep)
+  }
+
+  function onTreePointerUp() {
+    if (dragRef.current) endDrag()
+  }
+
+  function onTreeKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault()
+      onSetCheckedMany(orderedIds, checkedIds.size !== lessons.length)
+      return
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const cur = kbFocusId ? visibleIds.indexOf(kbFocusId) : -1
+      const next =
+        cur < 0
+          ? e.key === 'ArrowDown'
+            ? 0
+            : visibleIds.length - 1
+          : Math.max(0, Math.min(visibleIds.length - 1, cur + (e.key === 'ArrowDown' ? 1 : -1)))
+      setKbFocusId(visibleIds[next] ?? null)
+      return
+    }
+    if (!kbFocusId) return
+    if (e.key === ' ') {
+      e.preventDefault()
+      onToggleCheck(kbFocusId)
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      onSelect(kbFocusId)
+    }
+  }
+
+  function toggleCollapse(chapter: string) {
+    setCollapsed((prev) => {
+      const n = new Set(prev)
+      if (n.has(chapter)) n.delete(chapter)
+      else n.add(chapter)
+      return n
+    })
+  }
+
   return (
-    <div className="lesson-tree">
-      {[...m_byChapterEntries(byChapter)].map(([chapter, items]) => (
-        <div key={chapter}>
-          <div className="chapter-row">📁 {chapter || '（未分章）'}</div>
-          {items.map((l) => {
-            const st = statuses.get(l.id)
-            return (
-              <div
-                key={l.id}
-                className={`lesson-row selectable ${selectedId === l.id ? 'selected' : ''}`}
-                onClick={() => onSelect(l.id)}
+    <div
+      ref={treeRef}
+      className={`lesson-tree ${dragging ? 'dragging' : ''}`}
+      tabIndex={0}
+      title="按住左键滑动可批量勾选；树内 ↑↓ 选择、Space 勾选、Enter 打开"
+      onPointerDown={onTreePointerDown}
+      onPointerMove={onTreePointerMove}
+      onPointerUp={onTreePointerUp}
+      onPointerCancel={onTreePointerUp}
+      onKeyDown={onTreeKeyDown}
+      onDragStart={(e) => e.preventDefault()}
+    >
+      {ordered.map(([chapter, items]) => {
+        const ids = items.map((l) => l.id)
+        const st = chapterCheckState(ids, checkedIds)
+        const isCollapsed = collapsed.has(chapter)
+        return (
+          <div key={chapter}>
+            <div
+              className="chapter-row"
+              onClick={() => onSetCheckedMany(ids, st !== 'all')}
+              title="点击全选/取消本章节"
+            >
+              <span
+                className="collapse-toggle"
+                role="button"
+                aria-label={isCollapsed ? '展开章节' : '折叠章节'}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  toggleCollapse(chapter)
+                }}
               >
-                <input
-                  type="checkbox"
-                  className="lesson-check"
-                  checked={checkedIds.has(l.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={() => onToggleCheck(l.id)}
-                  title="勾选后可用侧栏「AI 一键生成」批量转化"
-                />
-                📄 {l.title}{' '}
-                {st ? <span className={`chip chip-${st.uiState}`}>{st.uiState}</span> : null}
-              </div>
-            )
-          })}
-        </div>
-      ))}
+                {isCollapsed ? '▸' : '▾'}
+              </span>
+              <input
+                type="checkbox"
+                className="chapter-check"
+                checked={st === 'all'}
+                ref={(el) => {
+                  if (el) el.indeterminate = st === 'partial'
+                }}
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => onSetCheckedMany(ids, st !== 'all')}
+                title="全选/取消本章节"
+              />
+              📁 {chapter || '（未分章）'}
+              <span className="muted chapter-count"> ({items.length})</span>
+            </div>
+            {!isCollapsed &&
+              items.map((l) => {
+                const st = statuses.get(l.id)
+                return (
+                  <div
+                    key={l.id}
+                    data-id={l.id}
+                    className={`lesson-row selectable ${selectedId === l.id ? 'selected' : ''} ${
+                      kbFocusId === l.id ? 'kb-focus' : ''
+                    }`}
+                    onClick={(e) => {
+                      if (suppressClickRef.current) return
+                      setKbFocusId(l.id)
+                      if (e.shiftKey) onToggleCheck(l.id, { shift: true })
+                      else if (e.ctrlKey || e.metaKey) onToggleCheck(l.id)
+                      else onSelect(l.id)
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      className="lesson-check"
+                      checked={checkedIds.has(l.id)}
+                      onClick={(e) => {
+                        if (suppressClickRef.current) {
+                          e.preventDefault()
+                          return
+                        }
+                        e.stopPropagation()
+                        lastShiftRef.current = e.shiftKey
+                      }}
+                      onChange={() => onToggleCheck(l.id, { shift: lastShiftRef.current })}
+                      title="勾选后可用侧栏「AI 一键生成」批量转化；Shift+点击勾选一段"
+                    />
+                    📄 {l.title}{' '}
+                    {st ? <span className={`chip chip-${st.uiState}`}>{st.uiState}</span> : null}
+                  </div>
+                )
+              })}
+          </div>
+        )
+      })}
     </div>
   )
-}
-
-function m_byChapterEntries(m: Map<string, LessonRecord[]>): [string, LessonRecord[]][] {
-  return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0], 'zh-Hans-CN'))
 }
 
 /** 溯源跳转高亮：给定 trace 显示原文片段 */

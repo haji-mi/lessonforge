@@ -4,6 +4,12 @@ import { useRef, useState } from 'react'
 import type { NameDecisionSet, ZipScanResult } from '../core/import/zip/importZip'
 import { importZipEntries, scanZip } from '../core/import/zip/importZip'
 import { filesFromDirectoryPicker } from '../core/import/importDir'
+import {
+  filesFromDirectoryHandle,
+  pickCourseDirectory,
+  supportsDirectoryPicker,
+} from '../core/import/fsa'
+import type { CourseDirHandle } from '../core/import/fsa'
 import type { ImportedFile } from '../core/types'
 import type { StructureCourse } from '../core/structure/infer'
 
@@ -12,6 +18,7 @@ export interface ImportWizardProps {
     files: ImportedFile[],
     source: 'dir' | 'zip',
     otherFiles: { path: string; size: number }[],
+    dirHandle: CourseDirHandle | null,
   ) => void
   onCancel: () => void
 }
@@ -26,11 +33,30 @@ export function ImportWizard({ onDone, onCancel }: ImportWizardProps) {
   const dirInput = useRef<HTMLInputElement>(null)
   const zipInput = useRef<HTMLInputElement>(null)
 
+  async function pickDir() {
+    setError(null)
+    if (supportsDirectoryPicker()) {
+      // 主路径：目录句柄绑定到项目，此后每次打开项目自动重读目录（增量更新）
+      try {
+        const handle = await pickCourseDirectory()
+        if (!handle) return // 用户取消
+        const { files, otherFiles, diagnostics } = await filesFromDirectoryHandle(handle)
+        if (diagnostics.some((d) => d.severity === 'error'))
+          setError(diagnostics.map((d) => d.message).join('；'))
+        onDone(files, 'dir', otherFiles, handle)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+      return
+    }
+    dirInput.current?.click() // 回退：webkitdirectory（无重读能力，可稍后在项目内绑定目录）
+  }
+
   async function onDirPicked(files: File[]) {
     const { files: imported, otherFiles, diagnostics } = filesFromDirectoryPicker(files)
     if (diagnostics.some((d) => d.severity === 'error'))
       setError(diagnostics.map((d) => d.message).join('；'))
-    onDone(imported, 'dir', otherFiles)
+    onDone(imported, 'dir', otherFiles, null)
   }
 
   async function onZipPicked(file: File) {
@@ -72,7 +98,7 @@ export function ImportWizard({ onDone, onCancel }: ImportWizardProps) {
         setError('没有可导入的文件：' + result.diagnostics.map((d) => d.message).join('；'))
         return
       }
-      onDone(result.files, 'zip', result.otherFiles)
+      onDone(result.files, 'zip', result.otherFiles, null)
     } catch (e) {
       setError(String(e))
     } finally {
@@ -83,9 +109,13 @@ export function ImportWizard({ onDone, onCancel }: ImportWizardProps) {
   return (
     <div className="wizard">
       <h2>导入课程资料</h2>
-      <p className="muted">目录导入为主路径（无编码歧义）；ZIP 导入支持 GBK/UTF-8 名称判定。</p>
+      <p className="muted">
+        目录导入为主路径（无编码歧义）
+        {supportsDirectoryPicker() ? '，并绑定目录：此后每次打开项目自动重读目录增量更新' : ''}；
+        ZIP 导入支持 GBK/UTF-8 名称判定。
+      </p>
       <div className="wizard-actions">
-        <button onClick={() => dirInput.current?.click()}>选择课程目录</button>
+        <button onClick={pickDir}>选择课程目录</button>
         <button onClick={() => zipInput.current?.click()}>选择 ZIP 文件</button>
         <input
           ref={dirInput}

@@ -126,4 +126,33 @@ describe('runBatchTransform', () => {
     expect(ls.has('cc-ai-transform:b')).toBe(false)
     expect(JSON.parse(ls.get('cc-ai-transform:a')!).sourceFingerprint).toBeTruthy()
   })
+
+  it('isCancelled 命中后停止：当前篇完成后不再继续，已完成保留且不发收尾进度', async () => {
+    stubLs()
+    let stop = false
+    const transform = vi.fn(async (input: { lessonTitle: string }) => {
+      if (input.lessonTitle === 'A') stop = true // A 完成后请求停止
+      return fakeTransformResult('ok')
+    })
+    const progress: { done: number; total: number; currentTitle: string | null }[] = []
+    const r = await runBatchTransform(
+      [
+        lesson({ lessonId: 'a', title: 'A', promptText: 'p' }),
+        lesson({ lessonId: 'b', title: 'B', promptText: 'p' }),
+        lesson({ lessonId: 'c', title: 'C', promptText: 'p' }),
+      ],
+      {
+        transform: transform as never,
+        gapMs: 0,
+        isCancelled: () => stop,
+        onProgress: (p) => progress.push(p),
+      },
+    )
+    expect(r.cancelled).toBe(true)
+    expect(r.ok).toBe(1)
+    expect(r.outcomes.map((o) => o.lessonId)).toEqual(['a'])
+    expect(transform).toHaveBeenCalledTimes(1)
+    // 取消时不发收尾进度（done=total 会误导 UI）
+    expect(progress).toEqual([{ done: 0, total: 3, currentTitle: 'A' }])
+  })
 })

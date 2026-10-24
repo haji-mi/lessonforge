@@ -91,20 +91,47 @@ describe('buildTransformMessages：消息构建（纯函数）', () => {
       expect(sys!.content).toContain(key)
     }
   })
+  it('system 锁定结构化产出格式（OpenMAIC 式管线友好）', () => {
+    const [sys] = buildTransformMessages({ ...base, mode: 'polish', sourceText: 'x' })
+    for (const key of [
+      '课程标题', // ≤30字名词短语蒸馏（对应下游 courseTitle）
+      '上屏要点', // 幻灯片是视觉辅助：短语上屏，长句进口头
+      '口头讲解', // 与上屏要点分离
+      '等待学生回答',
+      '题量与题型', // 小测显式配置（对应 quizConfig）
+      '互动建议', // 交互场景标注
+      '最多 2 处', // interactive 配额（OpenMAIC: max 1-2 per course）
+    ]) {
+      expect(sys!.content).toContain(key)
+    }
+    // 不再禁止元信息：字段化课程信息头恰恰是下游引擎要提取的
+    expect(sys!.content).not.toContain('不要标题外的元信息')
+  })
   it('polish 与 rewrite 的任务描述不同', () => {
     const p = buildTransformMessages({ ...base, mode: 'polish', sourceText: 'x' })
     const r = buildTransformMessages({ ...base, mode: 'rewrite', sourceText: 'x' })
     expect(p[0]!.content).toContain('编译稿')
     expect(r[0]!.content).toContain('原始课堂笔记')
   })
-  it('user 消息嵌入课题与材料全文', () => {
+  it('user 消息嵌入课题、课时与材料全文', () => {
     const [, user] = buildTransformMessages({
       ...base,
       mode: 'rewrite',
       sourceText: '笔记内容ABC',
     })
     expect(user!.content).toContain('【课题】勾股定理')
+    expect(user!.content).toContain('【课时】约40分钟')
     expect(user!.content).toContain('笔记内容ABC')
+  })
+  it('自定义课时长度透传到 system 与 user', () => {
+    const [sys, user] = buildTransformMessages({
+      ...base,
+      mode: 'rewrite',
+      sourceText: 'x',
+      durationMinutes: 45,
+    })
+    expect(sys!.content).toContain('≈45分钟')
+    expect(user!.content).toContain('【课时】约45分钟')
   })
   it('超长材料截断并标注', () => {
     const long = 'a'.repeat(MAX_INPUT_CHARS + 500)

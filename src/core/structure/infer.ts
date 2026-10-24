@@ -160,7 +160,8 @@ export function inferStructure(
   const rootLessons = root.files.map((f) => {
     const fileName = f.normPath.split('/').pop()!
     const t = lessonTitle(f, fileName)
-    return { path: f.normPath, title: t.title, titleBasis: t.basis }
+    // 根目录提升剥离过前缀时，回填原始完整路径（与章节课时、pathIndex 保持一致）
+    return { path: f.originalNormPath ?? f.normPath, title: t.title, titleBasis: t.basis }
   })
   rootLessons.sort((a, b) =>
     compareEntries({ name: a.path, kind: 'file' }, { name: b.path, kind: 'file' }),

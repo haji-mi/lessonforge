@@ -8,7 +8,7 @@
  * OpenCode 说明：本机 OpenCode 仅存 GitHub Copilot OAuth（非静态 Key）且其 serve
  * 当前无法启动，暂不能直接借用其额度——如实告知，不提供假通路。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   FREE_MODELS,
   MODEL_LABEL,
@@ -46,6 +46,15 @@ export function AiSettingsDialog({
   const [testAttempts, setTestAttempts] = useState<AttemptLog[] | null>(null)
 
   const cfg: ProviderConfig = draft.providers[draft.provider]
+
+  // Esc 关闭（与点击遮罩一致），不打断正在进行的测试/拉取请求
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [onClose])
 
   function patchCfg(patch: Partial<ProviderConfig>) {
     setDraft((d) => ({

@@ -37,6 +37,8 @@ export interface BatchOptions {
   /** 篇间间隔毫秒（默认 2500，免费档限流保险；测试传 0） */
   gapMs?: number
   onProgress?: (p: BatchProgress) => void
+  /** 返回 true 时在当前篇完成后停止批次（不中断进行中的单篇请求）；已完成的保留 */
+  isCancelled?: () => boolean
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
@@ -50,11 +52,16 @@ export function pickBatchMode(l: BatchLessonInput): AiTransformMode | null {
 export async function runBatchTransform(
   lessons: BatchLessonInput[],
   opts: BatchOptions = {},
-): Promise<{ outcomes: BatchOutcome[]; ok: number; failed: number }> {
+): Promise<{ outcomes: BatchOutcome[]; ok: number; failed: number; cancelled: boolean }> {
   const transform = opts.transform ?? aiTransformLesson
   const gapMs = opts.gapMs ?? 2500
   const outcomes: BatchOutcome[] = []
+  let cancelled = false
   for (let i = 0; i < lessons.length; i++) {
+    if (opts.isCancelled?.()) {
+      cancelled = true
+      break
+    }
     const l = lessons[i]!
     opts.onProgress?.({ done: i, total: lessons.length, currentTitle: l.title })
     const mode = pickBatchMode(l)
@@ -103,10 +110,12 @@ export async function runBatchTransform(
     }
     if (i < lessons.length - 1 && gapMs > 0) await sleep(gapMs)
   }
-  opts.onProgress?.({ done: lessons.length, total: lessons.length, currentTitle: null })
+  if (!cancelled)
+    opts.onProgress?.({ done: lessons.length, total: lessons.length, currentTitle: null })
   return {
     outcomes,
     ok: outcomes.filter((o) => o.ok).length,
     failed: outcomes.filter((o) => !o.ok).length,
+    cancelled,
   }
 }

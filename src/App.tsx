@@ -1,5 +1,5 @@
 /** 应用主入口：项目列表 / 导入向导 / 工作台 / 诊断 / 批量导出 */
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PromptSection } from './core/compile/compile'
 import { parseDoc } from './core/parse/parse'
 import {
@@ -26,13 +26,22 @@ import {
   markCoverageAck,
   markExported,
   renameLessonTitle,
+  resyncProjectFromDir,
   resolveConflict,
   saveEdit,
   setLessonTypeManual,
+  setProjectDirHandle,
+  type DirResyncResult,
   type LessonStatus,
 } from './core/persist/project'
 import type { LessonRecord, ProjectRecord, RevisionRecord } from './core/persist/db'
 import { getCurrentRevision } from './core/persist/project'
+import {
+  ensureReadPermission,
+  pickCourseDirectory,
+  supportsDirectoryPicker,
+  type CourseDirHandle,
+} from './core/import/fsa'
 import { inferStructure, type StructureCourse } from './core/structure/infer'
 import { ImportWizard, StructureConfirm } from './ui/ImportWizard'
 import {
@@ -43,10 +52,14 @@ import {
   loadLessonContext,
 } from './ui/LessonPanel'
 import { AiSettingsDialog } from './ui/AiSettingsDialog'
+import { ChapterMergeDialog } from './ui/ChapterMergeDialog'
+import { orderedLessonIds, rangeBetween, setMany } from './ui/tree-selection'
 import { runBatchTransform, type BatchLessonInput } from './ai/batch'
 import { loadAiSettings, isAiConfigured } from './ai/settings'
 
 type Screen = 'welcome' | 'import' | 'structure-confirm' | 'main'
+/** 顶栏批量操作（编译/导出）的作用范围 */
+type BatchScope = 'all' | 'checked'
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('welcome')
@@ -62,7 +75,16 @@ export default function App() {
   const [trace, setTrace] = useState<{ start: number; end: number } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
   const [showAiSettings, setShowAiSettings] = useState(false)
+  const [showChapterMerge, setShowChapterMerge] = useState(false)
   const [checked, setChecked] = useState<Set<string>>(new Set())
+  /** 编译/导出的作用范围（默认全部）；勾选清空时自动回落为全部 */
+  const [batchScope, setBatchScope] = useState<BatchScope>('all')
+  /** AI 批量「停止」旗标：当前篇完成后不再继续（不中断进行中的请求） */
+  const batchCancelRef = useRef(false)
+  /** 顶栏「重读目录」进行中（防止并发重读） */
+  const [resyncBusy, setResyncBusy] = useState(false)
+  /** Shift 范围勾选的锚点 = 上一次单点勾选的行 */
+  const lastCheckedIdRef = useRef<string | null>(null)
   const [aiBatch, setAiBatch] = useState<{
     running: boolean
     done: number
@@ -90,10 +112,68 @@ export default function App() {
     return () => clearTimeout(t)
   }, [toast])
 
-  async function selectProject(p: ProjectRecord) {
+  /** 重读结果提示文案；无任何变化 → null（打开时静默，不打扰） */
+  function resyncToastText(r: DirResyncResult): string | null {
+    const changedCount = r.outcome.added.length + r.outcome.changed.length + r.removed.length
+    if (changedCount === 0) return null
+    const parts = [`新增 ${r.outcome.added.length}`, `内容变化 ${r.outcome.changed.length}`]
+    if (r.removed.length > 0) parts.push(`移除 ${r.removed.length}`)
+    return `已重读课程目录：${parts.join('，')}，无变化 ${r.outcome.unchanged.length}`
+  }
+
+  /** 打开项目时重读绑定的课程目录；授权丢失/读取失败 → 降级用上次导入内容并提示 */
+  async function resyncBoundDir(p: ProjectRecord) {
+    if (!p.dirHandle) return
+    try {
+      if (!(await ensureReadPermission(p.dirHandle))) {
+        setToast('目录读取未授权——本次展示上次导入的内容；点击顶部「重读目录」可重新授权')
+        return
+      }
+      const r = await resyncProjectFromDir(p.id, p.dirHandle)
+      const text = resyncToastText(r)
+      if (r.noOverlap) setToast('重读结果与已导入内容零重叠——请确认绑定的是当初导入的同一目录')
+      else if (text) setToast(text)
+    } catch (e) {
+      setToast(`重读课程目录失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  /** 顶栏「重读目录」：已绑定 → 立即重读；未绑定（旧项目）→ 先选目录绑定 */
+  async function bindOrResyncDir() {
+    if (!project || resyncBusy) return
+    setResyncBusy(true)
+    try {
+      let handle = project.dirHandle ?? null
+      if (!handle) {
+        handle = await pickCourseDirectory()
+        if (!handle) return
+        await setProjectDirHandle(project.id, handle)
+        setProject({ ...project, dirHandle: handle })
+      }
+      if (!(await ensureReadPermission(handle))) {
+        setToast('未获得目录读取授权，无法重读')
+        return
+      }
+      const r = await resyncProjectFromDir(project.id, handle)
+      setToast(
+        r.noOverlap
+          ? '重读结果与已导入内容零重叠——请确认绑定的是当初导入的同一目录'
+          : (resyncToastText(r) ?? `已重读课程目录：无变化 ${r.outcome.unchanged.length}`),
+      )
+      await refreshLessons(project.id)
+      await refreshSelected()
+    } catch (e) {
+      setToast(`重读目录失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setResyncBusy(false)
+    }
+  }
+
+  async function selectProject(p: ProjectRecord, opts?: { skipResync?: boolean }) {
     setProject(p)
     setSelected(null)
     setChecked(new Set())
+    if (!opts?.skipResync) await resyncBoundDir(p)
     const ls = await refreshLessons(p.id)
     if (ls.length > 0) await selectLesson(ls[0]!)
     setScreen('main')
@@ -117,8 +197,15 @@ export default function App() {
     if (fresh) await selectLesson(fresh)
   }
 
-  async function onImportDone(files: import('./core/types').ImportedFile[], source: 'dir' | 'zip') {
+  async function onImportDone(
+    files: import('./core/types').ImportedFile[],
+    source: 'dir' | 'zip',
+    _otherFiles: { path: string; size: number }[],
+    dirHandle: CourseDirHandle | null,
+  ) {
     const p = await createProject(`课程 ${new Date().toLocaleString('zh-CN')}`)
+    if (dirHandle) await setProjectDirHandle(p.id, dirHandle)
+    p.dirHandle = dirHandle ?? undefined
     const outcome = await importFiles(p.id, files, source)
     setProject(p)
     await refreshProjects()
@@ -153,7 +240,8 @@ export default function App() {
       const target = ls.find((l) => l.normPath === path)
       if (target) await renameLessonTitle(target.id, title)
     }
-    await selectProject(project!)
+    // 刚导入完成，内容即为最新，跳过打开时的自动重读
+    await selectProject(project!, { skipResync: true })
   }
 
   async function onAction(action: string) {
@@ -210,12 +298,31 @@ export default function App() {
     await refreshSelected()
   }
 
+  /** 勾选清空时范围自动回落为全部，避免下拉选中「已勾选」后无值可选 */
+  const effectiveScope: BatchScope =
+    batchScope === 'checked' && checked.size > 0 ? 'checked' : 'all'
+
+  /** 顶栏批量操作（编译/导出）的目标列表：按范围下拉取全部或已勾选课时 */
+  function scopeTargets(): LessonRecord[] {
+    if (effectiveScope === 'checked') {
+      const ts = lessons.filter((l) => checked.has(l.id))
+      if (ts.length === 0) {
+        setToast('勾选列表为空——先在左侧勾选课时，或把范围切回「全部」')
+        return []
+      }
+      return ts
+    }
+    return lessons
+  }
+
   async function batchCompile() {
     if (!project) return
+    const targets = scopeTargets()
+    if (targets.length === 0) return
     let compiled = 0
     let conflicts = 0
     const failed: string[] = []
-    for (const l of lessons) {
+    for (const l of targets) {
       try {
         const r = await compileAndStoreDraft(l.id)
         compiled++
@@ -242,8 +349,10 @@ export default function App() {
 
   async function batchExport() {
     if (!project) return
+    const targets = scopeTargets()
+    if (targets.length === 0) return
     const exported: { plan: any; meta: LessonExportMeta }[] = []
-    for (const l of lessons) {
+    for (const l of targets) {
       const eff = await getEffectivePlan(l.id)
       if (!eff) continue
       const st = await computeLessonStatus(l.id)
@@ -264,7 +373,7 @@ export default function App() {
     const blob = exportLessonsZip(exported)
     downloadBlob(blob, `${project.name}.zip`)
     setToast(`已批量导出 ${exported.length} 个课时（ZIP）`)
-    for (const l of lessons) await markExported(l.id)
+    for (const l of targets) await markExported(l.id)
     await refreshLessons(project.id)
   }
 
@@ -277,13 +386,32 @@ export default function App() {
 
   // ── 批量勾选 + AI 一键生成 ──
 
-  function toggleChecked(id: string) {
+  /**
+   * 单点勾选/取消。Shift+点击 → [上次单点锚点..本行] 整段置为本次点击后的状态
+   * （锚点不移动，便于连续扩选）；普通点击 → 切换并更新锚点。
+   */
+  function toggleChecked(id: string, opts?: { shift?: boolean }) {
+    if (opts?.shift) {
+      const anchor = lastCheckedIdRef.current
+      if (anchor && anchor !== id) {
+        const ordered = orderedLessonIds(lessons)
+        const value = !checked.has(id)
+        setChecked((prev) => setMany(prev, rangeBetween(ordered, anchor, id), value))
+        return
+      }
+    }
     setChecked((prev) => {
       const n = new Set(prev)
       if (n.has(id)) n.delete(id)
       else n.add(id)
       return n
     })
+    lastCheckedIdRef.current = id
+  }
+
+  /** 批量置值：滑选区间 / Shift 范围 / 章节全选共用 */
+  function setCheckedMany(ids: string[], value: boolean) {
+    setChecked((prev) => setMany(prev, ids, value))
   }
 
   function toggleCheckAll() {
@@ -323,15 +451,22 @@ export default function App() {
         })
       }
       setAiBatch({ running: true, done: 0, total: inputs.length, current: null })
+      batchCancelRef.current = false
       const r = await runBatchTransform(inputs, {
         onProgress: (p) =>
           setAiBatch({ running: true, done: p.done, total: p.total, current: p.currentTitle }),
+        isCancelled: () => batchCancelRef.current,
       })
       const failed = r.outcomes.filter((o) => !o.ok)
+      const stopNote = r.cancelled
+        ? `（已手动停止，余下 ${inputs.length - r.outcomes.length} 篇未处理）`
+        : ''
       setToast(
         failed.length > 0
-          ? `AI 批量完成：成功 ${r.ok}，失败 ${failed.length}——${failed.map((f) => `${f.title}：${f.detail}`).join('；')}`
-          : `AI 批量完成：${r.ok} 篇全部成功（结果已缓存，到各课时「AI 转化」面板审阅/复制）`,
+          ? `AI 批量完成${stopNote}：成功 ${r.ok}，失败 ${failed.length}——${failed.map((f) => `${f.title}：${f.detail}`).join('；')}`
+          : r.cancelled
+            ? `AI 批量已停止：完成 ${r.ok} 篇（结果已缓存，可重新勾选续跑，已完成的走缓存不再耗额度）`
+            : `AI 批量完成：${r.ok} 篇全部成功（结果已缓存，到各课时「AI 转化」面板审阅/复制）`,
       )
     } catch (e) {
       setToast(`AI 批量中断：${e instanceof Error ? e.message : String(e)}`)
@@ -411,7 +546,9 @@ export default function App() {
     return (
       <div className="app">
         <ImportWizard
-          onDone={(files, source) => onImportDone(files, source)}
+          onDone={(files, source, otherFiles, dirHandle) =>
+            onImportDone(files, source, otherFiles, dirHandle)
+          }
           onCancel={() => setScreen('welcome')}
         />
         {toast ? <div className="toast">{toast}</div> : null}
@@ -444,8 +581,42 @@ export default function App() {
         </button>
         <h1>{project?.name}</h1>
         <div className="header-actions">
-          <button onClick={batchCompile}>编译全部</button>
-          <button onClick={batchExport}>批量导出 ZIP</button>
+          <select
+            className="scope-select"
+            value={effectiveScope}
+            onChange={(e) => setBatchScope(e.target.value as BatchScope)}
+            title="「编译」与「批量导出」的作用范围：全部课时，或左侧勾选的课时"
+          >
+            <option value="all">范围：全部课时</option>
+            {checked.size > 0 ? (
+              <option value="checked">范围：已勾选（{checked.size}）</option>
+            ) : null}
+          </select>
+          <button onClick={batchCompile}>
+            {effectiveScope === 'checked' ? `编译勾选（${checked.size}）` : '编译全部'}
+          </button>
+          <button onClick={batchExport}>
+            {effectiveScope === 'checked' ? `导出勾选（${checked.size}）` : '批量导出 ZIP'}
+          </button>
+          <button
+            onClick={() => setShowChapterMerge(true)}
+            title="把一章各课时的提示词（AI 稿/编译稿）合并成一份，整段复制/导出给豆包爱学"
+          >
+            📑 按章整合
+          </button>
+          {project?.dirHandle || supportsDirectoryPicker() ? (
+            <button
+              onClick={bindOrResyncDir}
+              disabled={resyncBusy}
+              title={
+                project?.dirHandle
+                  ? '重新读取绑定的课程目录：新增/内容变化自动合并，检测到源文件删除会同步移除课时'
+                  : '绑定课程目录（选当初导入的同一文件夹）：此后每次打开项目自动重读目录增量更新'
+              }
+            >
+              {resyncBusy ? '重读中…' : project?.dirHandle ? '⟳ 重读目录' : '⟳ 绑定目录'}
+            </button>
+          ) : null}
           <button onClick={backupJson}>备份 JSON</button>
           <button onClick={() => setShowAiSettings(true)}>⚙ AI 设置</button>
         </div>
@@ -468,8 +639,16 @@ export default function App() {
                 : `AI 一键生成（${checked.size}）`}
             </button>
           </div>
-          {aiBatch?.running && aiBatch.current ? (
-            <div className="muted sidebar-progress">当前：《{aiBatch.current}》</div>
+          {aiBatch?.running ? (
+            <div className="sidebar-progress">
+              <span className="muted">
+                {aiBatch.done}/{aiBatch.total}
+                {aiBatch.current ? ` 当前：《${aiBatch.current}》` : ''}
+              </span>
+              <button className="link" onClick={() => (batchCancelRef.current = true)}>
+                停止
+              </button>
+            </div>
           ) : null}
           <LessonTree
             lessons={lessons}
@@ -481,6 +660,7 @@ export default function App() {
             }}
             checkedIds={checked}
             onToggleCheck={toggleChecked}
+            onSetCheckedMany={setCheckedMany}
           />
         </aside>
         <main className="content">
@@ -533,6 +713,17 @@ export default function App() {
       </div>
       {showAiSettings ? (
         <AiSettingsDialog onClose={() => setShowAiSettings(false)} onToast={setToast} />
+      ) : null}
+      {showChapterMerge && project ? (
+        <ChapterMergeDialog
+          project={project}
+          lessons={lessons}
+          onClose={() => setShowChapterMerge(false)}
+          onToast={setToast}
+          onExported={async () => {
+            await refreshLessons(project.id)
+          }}
+        />
       ) : null}
       {toast ? <div className="toast">{toast}</div> : null}
     </div>

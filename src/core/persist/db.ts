@@ -7,6 +7,7 @@
 import Dexie, { type Table } from 'dexie'
 import { APP_MODEL_VERSION } from '../version'
 import type { EolStats } from '../custody/custody'
+import type { CourseDirHandle } from '../import/fsa'
 
 export interface ProjectRecord {
   id: string
@@ -15,6 +16,8 @@ export interface ProjectRecord {
   updatedAt: number
   modelVersion: number
   settings: Record<string, unknown>
+  /** 绑定的课程目录句柄（File System Access API，Chromium）：打开项目时重读目录；未绑定为空 */
+  dirHandle?: CourseDirHandle | null
 }
 
 export interface ImportBatchRecord {

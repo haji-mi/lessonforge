@@ -549,9 +549,131 @@ mark {
 }
 .sidebar-progress {
   padding: 2px 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sidebar-progress .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-progress .link {
+  flex-shrink: 0;
+}
+.lesson-tree {
+  user-select: none;
+  outline: none;
+}
+.lesson-tree.dragging {
+  cursor: grabbing;
+}
+.lesson-tree.dragging .lesson-row {
+  cursor: grabbing;
 }
 .lesson-check {
   margin-right: 4px;
   vertical-align: middle;
   cursor: pointer;
+}
+.chapter-check {
+  margin: 0 4px 0 2px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.chapter-row .collapse-toggle {
+  display: inline-block;
+  width: 14px;
+  cursor: pointer;
+  color: var(--muted, #888);
+  user-select: none;
+}
+.chapter-row .chapter-count {
+  font-weight: 400;
+  font-size: 12px;
+}
+.lesson-row.kb-focus {
+  outline: 1px solid #93c5fd;
+  outline-offset: -1px;
+}
+.scope-select {
+  max-width: 180px;
+}
+
+/* ── 按章整合 ── */
+.chapter-merge-box {
+  width: min(1060px, 94vw);
+  display: flex;
+  flex-direction: column;
+}
+.cm-columns {
+  display: flex;
+  gap: 14px;
+  margin-top: 10px;
+  min-height: 0;
+}
+.cm-nav {
+  width: 230px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  overflow: auto;
+  max-height: 64vh;
+}
+.cm-nav-item {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.cm-nav-item:hover {
+  background: #f0f7ff;
+}
+.cm-nav-item.active {
+  background: #dbeafe;
+}
+.cm-nav-item .cm-nav-sub {
+  display: block;
+  font-size: 12px;
+}
+.cm-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  max-height: 64vh;
+}
+.cm-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.cm-mat-list {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin: 8px 0;
+}
+.cm-mat-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 13px;
+  padding: 2px 0;
+}
+.cm-text {
+  width: 100%;
+  font-family: inherit;
+  line-height: 1.6;
+  resize: vertical;
+}
+.chip-ok {
+  background: #dcfce7;
+  color: #166534;
+}
+.chip-none {
+  background: #e5e7eb;
+  color: #374151;
 }

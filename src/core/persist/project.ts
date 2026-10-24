@@ -13,6 +13,7 @@ import { buildRevision } from '../custody/custody'
 import { inferStructure } from '../structure/infer'
 import { parseDoc } from '../parse/parse'
 import { segmentMkus } from '../model/mku'
+import { filesFromDirectoryHandle, type CourseDirHandle } from '../import/fsa'
 import type { ImportedFile } from '../types'
 import { COMPILER_VERSION } from '../version'
 import {
@@ -131,6 +132,79 @@ export async function getCurrentRevision(
   return db.revisions.get(idx.currentRevisionId)
 }
 
+/** 绑定/解绑课程目录句柄（句柄可持久化到 IndexedDB，刷新后仍可重读） */
+export async function setProjectDirHandle(
+  projectId: string,
+  handle: CourseDirHandle | null,
+): Promise<void> {
+  await getDb().projects.update(projectId, { dirHandle: handle })
+}
+
+export interface DirResyncResult {
+  outcome: ImportOutcome
+  /** 已从源目录消失、本次从项目中移除的路径 */
+  removed: string[]
+  /** 扫描结果与已有内容零重叠（疑似绑错目录） */
+  noOverlap: boolean
+}
+
+/**
+ * 打开项目时重读绑定的课程目录：走 importFiles 幂等合并
+ * （同路径同哈希 → 无操作；同路径新哈希 → 新修订版 + 课时标 staleSource；新路径 → 新增）。
+ * 移除护栏：源目录中消失的路径超过一半视为可能绑错目录/批量移动，跳过自动移除仅记诊断
+ * （防误删）；草稿、overlay 与修订版历史永不删除（U2）。移除的课时重导入后按同 ID 复原。
+ */
+export async function resyncProjectFromDir(
+  projectId: string,
+  handle: CourseDirHandle,
+): Promise<DirResyncResult> {
+  const db = getDb()
+  // 快照必须在 importFiles 之前取：合并会把新增路径写入索引，事后取会把新路径误判为已有重叠
+  const idxBefore = await db.pathIndex.where('projectId').equals(projectId).toArray()
+  const { files } = await filesFromDirectoryHandle(handle)
+  const outcome = await importFiles(projectId, files, 'dir')
+  const scanned = new Set(files.map((f) => f.normPath))
+  const existing = new Set(idxBefore.map((x) => x.normPath))
+  const missing = idxBefore.filter((x) => !scanned.has(x.normPath))
+  const overlap = files.filter((f) => existing.has(f.normPath)).length
+  const noOverlap = idxBefore.length > 0 && files.length > 0 && overlap === 0
+  const removed: string[] = []
+  // 护栏：消失路径过半不自动移除（扫描为空目录时 missing = 全部，同样被拦下）
+  if (files.length > 0 && missing.length > 0 && missing.length * 2 <= idxBefore.length) {
+    for (const x of missing) {
+      await db.pathIndex.delete(x.key)
+      // lesson.id 与 pathIndex.key 同为 `${projectId}:${normPath}`
+      await db.lessons.delete(x.key)
+      removed.push(x.normPath)
+    }
+    await addDiagnostic({
+      projectId,
+      scope: 'project',
+      code: 'DIR_RESYNC_REMOVED',
+      severity: 'warn',
+      message: `目录重读：${removed.length} 个路径已从源目录消失并移除（修订版/草稿历史保留）：${removed.join('、')}`,
+    })
+  } else if (missing.length > 0) {
+    await addDiagnostic({
+      projectId,
+      scope: 'project',
+      code: 'DIR_RESYNC_REMOVAL_SKIPPED',
+      severity: 'warn',
+      message: `目录重读：${missing.length}/${idxBefore.length} 个路径在源目录中消失，疑似绑错目录或批量移动，已跳过自动移除`,
+    })
+  }
+  if (noOverlap) {
+    await addDiagnostic({
+      projectId,
+      scope: 'project',
+      code: 'DIR_RESYNC_NO_OVERLAP',
+      severity: 'warn',
+      message: '目录重读：与已导入内容零重叠——若这不是当初导入的目录，请删除本项目重新导入',
+    })
+  }
+  return { outcome, removed, noOverlap }
+}
+
 export async function listLessons(projectId: string): Promise<LessonRecord[]> {
   const db = getDb()
   const all = await db.lessons.where('projectId').equals(projectId).toArray()
@@ -141,6 +215,12 @@ export async function listLessons(projectId: string): Promise<LessonRecord[]> {
 export async function ensureLessons(projectId: string): Promise<LessonRecord[]> {
   const db = getDb()
   const idx = await db.pathIndex.where('projectId').equals(projectId).toArray()
+  // 自愈：课时以 pathIndex 为准——指向已不存在路径的课时（含旧版根前缀剥离错位）清理后按完整路径重建
+  const known = new Set(idx.map((x) => x.normPath))
+  const allLessons = await listLessons(projectId)
+  const stale = allLessons.filter((l) => !known.has(l.normPath))
+  if (stale.length > 0) await db.lessons.bulkDelete(stale.map((l) => l.id))
+  const liveLessons = allLessons.filter((l) => known.has(l.normPath))
   const mdPaths = idx.filter((x) => x.kind === 'md').map((x) => x.normPath)
   if (mdPaths.length === 0) return []
   // 信号：标题来自 frontmatter/H1（需读取当前修订文本解析——为控制成本仅取标题与 frontmatter）
@@ -159,7 +239,7 @@ export async function ensureLessons(projectId: string): Promise<LessonRecord[]> 
     return { normPath: p, headings, frontmatter }
   })
   const structure = inferStructure(signals, '课程')
-  const existing = new Map((await listLessons(projectId)).map((l) => [l.normPath, l]))
+  const existing = new Map(liveLessons.map((l) => [l.normPath, l]))
 
   const upserts: LessonRecord[] = []
   const walkChapters = (
@@ -536,6 +616,9 @@ export async function exportProjectJson(projectId: string): Promise<string> {
     ],
   )
   if (!project) throw new Error('项目不存在')
+  // 目录句柄不可 JSON 序列化（会变成空对象），备份不含；恢复后可重新绑定
+  const projectClean = { ...project } as Record<string, unknown>
+  delete projectClean.dirHandle
   const revisionsB64 = revisions.map((r) => ({
     ...r,
     bytes: bytesToBase64(r.bytes) as unknown as Uint8Array,
@@ -544,7 +627,7 @@ export async function exportProjectJson(projectId: string): Promise<string> {
     format: 'classroom-compiler/project-backup',
     version: 1,
     exportedAt: Date.now(),
-    project,
+    project: projectClean,
     batches,
     revisions: revisionsB64,
     pathIndex,
@@ -561,7 +644,9 @@ export async function importProjectJson(json: string): Promise<string> {
   const data = JSON.parse(json)
   if (data.format !== 'classroom-compiler/project-backup') throw new Error('非本项目备份格式')
   const newId = randomUUID()
-  await db.projects.add({ ...data.project, id: newId, updatedAt: Date.now() })
+  const restoredProject = { ...data.project } as Record<string, unknown>
+  delete restoredProject.dirHandle // 备份中的残留句柄无效，恢复后需重新绑定
+  await db.projects.add({ ...restoredProject, id: newId, updatedAt: Date.now() } as ProjectRecord)
   for (const t of ['revisions', 'pathIndex', 'lessons'] as const) {
     const rows = (data[t] as Record<string, unknown>[]).map((r) => rewriteProjectId(r, newId))
     await db.table(t).bulkAdd(rows)
