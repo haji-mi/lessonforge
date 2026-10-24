@@ -3,18 +3,22 @@
 > 每个工作会话开始时读本文件 + `docs/ARCHITECTURE-BASELINE.md` + `git log`；
 > 结束时（自验收通过、提交完成后）**先更新本账本**，再执行链式交接。
 
-最后更新：2026-10-24（会话 D：K3 二轮修复——用户要求找出并修复全部「不能生成提示词」问题）
+最后更新：2026-10-24（会话 E：AI 转化功能——用户点名的 OpenRouter 免费模型提示词转化）
 
 ## 项目现状
 
-Obsidian → 豆包爱学互动课堂提示词编译器。**P0–P5 + P6-lite + K2 首轮校准 + K3 二轮修复完成**。
+Obsidian → 豆包爱学互动课堂提示词编译器。**P0–P5 + P6-lite + K2 首轮校准 + K3 二轮修复 + AI 转化完成**。
 K3：对用户真实库全管线诊断出 10 类问题（占位/未纳入/静默丢弃/UI 静默失败）并全部修复，
 真实库核心覆盖 99/208(48%) → **210/210(100%)**，详见 docs/ACCEPTANCE-K3-CALIBRATION.md。
+AI 转化：工作台面板把编译稿/原文笔记交给 OpenRouter 免费模型生成「建议稿」（不写回编译稿），
+多模型回退 + 显式触发省额度，CSP 唯一例外域 openrouter.ai，详见 docs/ACCEPTANCE-AI-TRANSFORM.md。
 
-- 测试：**213/213 全绿**；`npm run check`（typecheck+lint+format+test）退出码 0。
+- 测试：**234/234 全绿**（含新增 ai-openrouter 21 个，全 mock 零真实网络）；`npm run check`（typecheck+lint+format+test）退出码 0。
 - 真实数据验收：20 文件只读复刻管线复测——转写 0、硬失败 0、核心未纳入 0、related 未纳入 0；
   2-1 定义占位与 2-4 推导占位消失；2-2 标记 ambiguous（新 UI 提示人工确认课型）。
-- 提交：80b52ad(P0) → ae3d57f(P1) → c630b92(P2) → 09c6470(P3) → 62be249(P4) → e0f67f3(P5) → b51ea3f(P6-lite) → [K2/K3 见 git log]。
+- 应用内真实验收（会话 E）：生产构建下真实调用成功（nemotron-3-ultra 75s 一次成功，920 字产出），
+  编译稿未被动、缓存落 localStorage、设置对话框/回退明细 UI 正常。
+- 提交：80b52ad(P0) → ae3d57f(P1) → c630b92(P2) → 09c6470(P3) → 62be249(P4) → e0f67f3(P5) → b51ea3f(P6-lite) → [K2/K3/AI 见 git log]。
 
 ## 工作方式（必读）
 
@@ -42,6 +46,10 @@ K3：对用户真实库全管线诊断出 10 类问题（占位/未纳入/静默
   概念课纳入易错提醒、例题课纳入相关知识；变量说明列表前缀 bug 修复；
   批量编译点名报告失败课时；课型人工覆盖下拉 + ambiguous 警告（偏离基线 §7 硬阻断，
   见 ACCEPTANCE-K3 偏离记录）；COMPILER_VERSION=3。测试 213/213。
+- **AI 转化功能**（2026-10-24，用户点名）：`src/ai/**` 边界层（settings/openrouter/transform）
+  - AiPanel/AiSettingsDialog；免费模型按实测序列回退（仅 401 终止）；建议稿不写回编译稿（U1）；
+    localStorage 按课时缓存 + 材料指纹过期提示；CSP 唯一例外 openrouter.ai（基线 §13 修订 8）；
+    `.env.local`（gitignored）预置 Key + `.env.example` 模板。测试 234/234。
 
 ## 待办池（按优先级；会话 B 从这里领任务）
 

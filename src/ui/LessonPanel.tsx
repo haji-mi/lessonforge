@@ -1,4 +1,4 @@
-/** 课时工作台：文件树 + 原文预览 + 提示词编辑器（溯源并排/覆盖面板/冲突裁决/审批/导出） */
+/** 课时工作台：文件树 + 原文预览 + 提示词编辑器（溯源并排/覆盖面板/冲突裁决/审批/导出/AI 转化） */
 import { useEffect, useMemo, useState } from 'react'
 import type { LessonPlan, PromptSection } from '../core/compile/compile'
 import type { LessonType } from '../core/classify/type'
@@ -6,6 +6,7 @@ import { parseDoc } from '../core/parse/parse'
 import { getCurrentRevision, getEffectivePlan, type LessonStatus } from '../core/persist/project'
 import type { LessonRecord, RevisionRecord } from '../core/persist/db'
 import { MarkdownView } from './MarkdownView'
+import { AiPanel } from './AiPanel'
 
 const TYPE_OPTIONS: { value: LessonType; label: string }[] = [
   { value: 'concept', label: '概念理解' },
@@ -29,6 +30,8 @@ export interface LessonWorkbenchProps {
     text: string
     span: { start: number; end: number }
   }) => void
+  onToast: (msg: string) => void
+  onMarkExported: () => void | Promise<void>
   refresh: () => void
 }
 
@@ -43,10 +46,16 @@ export function LessonWorkbench(props: LessonWorkbenchProps) {
     onSetType,
     onJumpTrace,
     onIncludeMku,
+    onToast,
+    onMarkExported,
   } = props
   const [editingSection, setEditingSection] = useState<string | null>(null)
   const [editDraft, setEditDraft] = useState('')
   const [showCoverage, setShowCoverage] = useState(false)
+  const [showAi, setShowAi] = useState(false)
+  const activeType: LessonType =
+    effective?.plan.type ?? (lesson.typeManual as LessonType | null) ?? 'generic'
+  const typeLabel = TYPE_OPTIONS.find((t) => t.value === activeType)?.label ?? '通用讲解'
 
   return (
     <div className="workbench">
@@ -80,6 +89,7 @@ export function LessonWorkbench(props: LessonWorkbenchProps) {
             </select>
           </label>
           <button onClick={() => onAction('compile')}>{effective ? '重新编译' : '编译'}</button>
+          <button onClick={() => setShowAi(!showAi)}>AI 转化</button>
           {status.hasCandidate ? (
             <>
               <span className="warn-text">存在待决冲突（重编译产生了新草稿）</span>
@@ -108,6 +118,18 @@ export function LessonWorkbench(props: LessonWorkbenchProps) {
           </div>
         ) : null}
       </div>
+
+      {showAi ? (
+        <AiPanel
+          lessonId={lesson.id}
+          lessonTitle={lesson.title}
+          typeLabel={typeLabel}
+          promptText={effective?.plan.promptText ?? null}
+          noteText={revision?.text ?? null}
+          onToast={onToast}
+          onMarkExported={onMarkExported}
+        />
+      ) : null}
 
       {showCoverage && effective ? (
         <CoveragePanel

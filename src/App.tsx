@@ -36,6 +36,7 @@ import { getCurrentRevision } from './core/persist/project'
 import { inferStructure, type StructureCourse } from './core/structure/infer'
 import { ImportWizard, StructureConfirm } from './ui/ImportWizard'
 import { LessonTree, LessonWorkbench, TracePeek, loadLessonContext } from './ui/LessonPanel'
+import { AiSettingsDialog } from './ui/AiSettingsDialog'
 
 type Screen = 'welcome' | 'import' | 'structure-confirm' | 'main'
 
@@ -52,6 +53,7 @@ export default function App() {
   const [effective, setEffective] = useState<{ plan: any; hasEdits: boolean } | null>(null)
   const [trace, setTrace] = useState<{ start: number; end: number } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [showAiSettings, setShowAiSettings] = useState(false)
 
   const refreshProjects = useCallback(async () => setProjects(await listProjects()), [])
   const refreshLessons = useCallback(async (projectId: string) => {
@@ -364,6 +366,7 @@ export default function App() {
           <button onClick={batchCompile}>编译全部</button>
           <button onClick={batchExport}>批量导出 ZIP</button>
           <button onClick={backupJson}>备份 JSON</button>
+          <button onClick={() => setShowAiSettings(true)}>⚙ AI 设置</button>
         </div>
       </header>
       <div className="main-columns">
@@ -413,6 +416,11 @@ export default function App() {
                   const t = s.traces[0]
                   if (t) setTrace({ start: t.start, end: t.end })
                 }}
+                onToast={setToast}
+                onMarkExported={async () => {
+                  if (!selected) return
+                  await markExported(selected.id)
+                }}
                 refresh={refreshSelected}
               />
             </>
@@ -421,6 +429,9 @@ export default function App() {
           )}
         </main>
       </div>
+      {showAiSettings ? (
+        <AiSettingsDialog onClose={() => setShowAiSettings(false)} onToast={setToast} />
+      ) : null}
       {toast ? <div className="toast">{toast}</div> : null}
     </div>
   )
